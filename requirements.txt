@@ -2,6 +2,6 @@ pvporcupine
 pvrecorder
 pywinauto
 faster-whisper
-"fastapi[standard]"
+fastapi[standard]
 piper-tts
 redis
