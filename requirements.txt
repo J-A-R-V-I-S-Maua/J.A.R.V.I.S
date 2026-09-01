@@ -1,5 +1,5 @@
-pvporcupine 
-pvrecorder
+pyaudio
+openwakeword
 pywinauto
 faster-whisper
 fastapi[standard]
