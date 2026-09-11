@@ -1,7 +1,0 @@
-pyaudio
-openwakeword
-pywinauto
-faster-whisper
-fastapi[standard]
-piper-tts
-redis
