@@ -1,0 +1,59 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build: ./worker
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_BACKEND_URL=redis://redis:6379/0
+      - AUDIO_UPLOAD_DIR=/app/audio_uploads
+      - AUDIO_RETENTION_HOURS=24
+    volumes:
+      - whisper-cache:/root/.cache/huggingface
+      - audio-uploads:/app/audio_uploads
+    command: celery -A task worker --loglevel=info --concurrency=1
+    restart: unless-stopped
+
+  beat:
+    build: ./worker
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_BACKEND_URL=redis://redis:6379/0
+    command: celery -A task beat --loglevel=info
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_BACKEND_URL=redis://redis:6379/0
+      - AUDIO_UPLOAD_DIR=/app/audio_uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - audio-uploads:/app/audio_uploads
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  whisper-cache:
+  audio-uploads:
