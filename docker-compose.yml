@@ -24,7 +24,7 @@ services:
     volumes:
       - whisper-cache:/root/.cache/huggingface
       - audio-uploads:/app/audio_uploads
-    command: celery -A task worker --loglevel=info --concurrency=1
+    command: celery -A task worker --loglevel=info --pool=solo
     restart: unless-stopped
 
   beat:

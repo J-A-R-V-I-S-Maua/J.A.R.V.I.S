@@ -63,27 +63,26 @@ def send_for_transcription(file_path: str):
         return None
     
 def start():
-    """ Incia o servico para ouvir a chamada "hey jarvis" """
-
+    """Inicia o serviço para ouvir a wake word 'hey jarvis'."""
     print("Escutando...")
-
     try:
-        while True: 
-    
-            audio = np.frombuffer(mic_stream.read(CHUNCK), dtype=np.int16)  
+        while True:
+            audio_chunk = np.frombuffer(
+                mic_stream.read(CHUNCK, exception_on_overflow=False), dtype=np.int16
+            )
+            prediction = owwModel.predict(audio_chunk, timing=False)
 
-            prediction = owwModel.predict(audio, timing=False)
-    
-            if isinstance(prediction, dict):
-    
-                score = prediction['hey_jarvis']
-    
-                if score >= 0.3:
-                    print("Hey Jarvis detected")
+            if isinstance(prediction, dict) and prediction.get("hey_jarvis", 0) >= DETECTION_THRESHOLD:
+                print("Hey Jarvis detectado! Ouvindo comando...")
+                if hasattr(owwModel, "reset"):
+                    owwModel.reset()  # evita re-disparo no mesmo trecho de buffer, se suportado nessa versão
+                file_path = record_audio(RECORD_SECONDS)
+                send_for_transcription(file_path)
+                print("Escutando...")
     except KeyboardInterrupt:
         print("Parando...")
     finally:
-        mic_stream.start_stream()
+        mic_stream.stop_stream()
         mic_stream.close()
         audio_interface.terminate()
         

@@ -25,7 +25,8 @@ def _run_transcription(path: str, language: str):
         path,
         language = language,
         vad_filter = True,
-        no_repeat_ngram_size = 2
+        condition_on_previous_text=False,
+        temperature= 0.2
     )
 
     return[

@@ -62,7 +62,7 @@ async def post_transcribe_upload(
         "status": async_task.status,
     }
     
-@app.get("trasncribe/{task_id}/status")
+@app.get("/transcribe/{task_id}/status")
 async def get_transcribe_status(task_id: str):
     async_result = AsyncResult(task_id, app = celery_app)
     return {
