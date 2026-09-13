@@ -1,0 +1,2 @@
+-r wakeword/requirements.txt
+-r speakbar/requirements.txt
