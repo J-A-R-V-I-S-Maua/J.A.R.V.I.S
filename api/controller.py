@@ -65,8 +65,16 @@ async def post_transcribe_upload(
 @app.get("/transcribe/{task_id}/status")
 async def get_transcribe_status(task_id: str):
     async_result = AsyncResult(task_id, app = celery_app)
+    status = async_result.status
+    if status in ("FAILURE", "REVOKED"):
+        return {
+            "status": status,
+            "result": None,
+            "error": str(async_result.result or "A tarefa foi cancelada."),
+            "task_id": async_result.id,
+        }
     return {
-        "status": async_result.status,
+        "status": status,
         "result": async_result.result if async_result.ready() else None,
         "task_id": async_result.id,
     }

@@ -2,13 +2,46 @@
 
 import math
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMenu, QPushButton, QSystemTrayIcon, QWidget,
+    QApplication, QHBoxLayout, QTextEdit, QMenu, QPushButton, QSystemTrayIcon, QWidget,
 )
 
-from .controller import DemoController, State
+from .controller import DemoController, VoiceController, State
+
+
+class TranscriptView(QTextEdit):
+    drag_started = Signal(object)
+    drag_moved = Signal(object)
+    drag_finished = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setTabChangesFocus(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(0)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self.drag_started.emit(event.globalPosition().toPoint())
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self.drag_moved.emit(event.globalPosition().toPoint())
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.drag_finished.emit()
+        super().mouseReleaseEvent(event)
 
 
 def draw_wave(painter, center, phase=0.0, animated=False):
@@ -91,27 +124,31 @@ class CircleButton(QPushButton):
 
 
 class Speakbar(QWidget):
-    def __init__(self):
+    def __init__(self, *, demo=False, controller=None):
         super().__init__()
-        self.setWindowTitle("J.A.R.V.I.S. — Speakbar (demonstração)")
+        self.demo = demo
+        self._closing = False
+        self._resizing_text = False
+        self.setWindowTitle("J.A.R.V.I.S. — Speakbar" + (" (demonstração)" if demo else ""))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowIcon(make_icon())
         self._drag_offset = None
-        self.controller = DemoController(self)
+        self.controller = controller or (DemoController(self) if demo else VoiceController(self))
         self.voice = CircleButton("voice", self)
         self.close_button = CircleButton("close", self)
         self.close_button.setAccessibleName("Fechar aplicação")
         self.close_button.setToolTip("Fechar aplicação (Alt+F4)")
-        self.message = QLabel(State.IDLE.value, self)
-        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message = TranscriptView(self)
         font = QFont("Segoe UI")
         font.setPixelSize(18)
         self.message.setFont(font)
-        self.message.setStyleSheet("color: #111111; background: transparent;")
-        self.message.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.message.setStyleSheet("QTextEdit { color: #111111; background: transparent; border: 0; } QTextEdit:focus { border-bottom: 1px solid #005ea8; }")
         self.message.setMinimumWidth(0)
-        self.message.installEventFilter(self)
+        self.message.viewport().installEventFilter(self)
+        self.message.drag_started.connect(self._start_drag)
+        self.message.drag_moved.connect(self._move_drag)
+        self.message.drag_finished.connect(self._end_drag)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 5, 12, 5)
         layout.setSpacing(12)
@@ -119,13 +156,15 @@ class Speakbar(QWidget):
         layout.addWidget(self.message, 1)
         layout.addWidget(self.close_button)
         self.setTabOrder(self.voice, self.close_button)
+        self.setTabOrder(self.close_button, self.message)
         self.voice.clicked.connect(self.controller.toggle)
         self.close_button.clicked.connect(self.close)
         self.controller.state_changed.connect(self._render_state)
-        self._render_state(State.IDLE)
+        self.controller.stopped.connect(self._finish_quit)
+        self._render_state(self.controller.current_event)
 
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
-        self.tray.setToolTip("J.A.R.V.I.S. — Speakbar (demonstração)")
+        self.tray.setToolTip(self.windowTitle())
         self.tray_menu = QMenu()
         self.tray_menu.addAction("Mostrar barra", self.restore)
         self.tray_menu.addSeparator()
@@ -152,24 +191,59 @@ class Speakbar(QWidget):
         self._connect_screen(screen)
         self.keep_on_screen()
 
-    def _render_state(self, state):
+    def _render_state(self, event):
         self._update_message()
-        self.message.setAccessibleName(state.value)
-        self.message.setToolTip(state.value)
-        active = state is not State.IDLE
-        name = "Cancelar demonstração" if active else "Iniciar demonstração de voz"
+        self.message.setAccessibleName("Transcrição e estado do reconhecimento")
+        self.message.setAccessibleDescription(event.text)
+        self.message.setToolTip(event.text)
+        active = event.state in (State.LISTENING, State.PROCESSING)
+        name = "Cancelar interação" if active else "Gravar comando"
+        if event.state is State.ERROR:
+            name = "Tentar novamente"
+        if self.demo:
+            name = "Cancelar demonstração" if active else "Iniciar demonstração de voz"
         self.voice.setAccessibleName(name)
-        self.voice.setToolTip(name + " (sem usar o microfone)")
-        self.voice.set_listening(state is State.LISTENING and self.isVisible())
+        self.voice.setToolTip(name)
+        self.voice.setEnabled(event.state not in (State.PREPARING, State.CANCELLING, State.STOPPING, State.STOPPED))
+        self.voice.set_listening(event.state is State.LISTENING)
 
     def _update_message(self):
-        self.message.setText(self.message.fontMetrics().elidedText(
-            self.controller.state.value, Qt.TextElideMode.ElideRight, self.message.width()
-        ))
+        if self.message.toPlainText() != self.controller.text:
+            self.message.setPlainText(self.controller.text)
+            cursor = self.message.textCursor()
+            block = cursor.blockFormat()
+            block.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cursor.select(cursor.SelectionType.Document)
+            cursor.mergeBlockFormat(block)
+            cursor.clearSelection()
+            self.message.verticalScrollBar().setValue(0)
+        self._fit_message()
+
+    def _fit_message(self):
+        if self._resizing_text:
+            return
+        self._resizing_text = True
+        try:
+            bottom = self.y() + self.height()
+            width = max(40, self.width() - 144 - 18)
+            metrics = self.message.fontMetrics()
+            text_height = metrics.boundingRect(QRect(0, 0, width, 10000),
+                Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere,
+                self.controller.text).height()
+            lines = min(3, max(1, math.ceil(text_height / metrics.lineSpacing())))
+            height = max(60, lines * metrics.lineSpacing() + 16)
+            screen = QApplication.screenAt(self.pos() + self.rect().center()) or QApplication.primaryScreen()
+            self.setFixedHeight(min(height, screen.availableGeometry().height()))
+            self.message.setFixedHeight(min(lines * metrics.lineSpacing() + 4, self.height() - 10))
+            area = screen.availableGeometry()
+            self.move(max(area.left(), min(self.x(), area.right() + 1 - self.width())),
+                      max(area.top(), min(bottom - self.height(), area.bottom() + 1 - self.height())))
+        finally:
+            self._resizing_text = False
 
     def eventFilter(self, watched, event):
-        if watched is self.message and event.type() == QEvent.Type.Resize:
-            self._update_message()
+        if watched is self.message.viewport() and event.type() == QEvent.Type.Resize:
+            self._fit_message()
         return super().eventFilter(watched, event)
 
     def paintEvent(self, event):
@@ -195,24 +269,34 @@ class Speakbar(QWidget):
                 return (position.x() - x) ** 2 + (position.y() - y) ** 2
             screen = min(QApplication.screens(), key=distance)
         area = screen.availableGeometry()
-        self.setFixedSize(min(692, area.width()), min(60, area.height()))
+        self.setFixedWidth(min(692, area.width()))
+        self._fit_message()
         self.move(max(area.left(), min(position.x(), area.right() + 1 - self.width())),
                   max(area.top(), min(position.y(), area.bottom() + 1 - self.height())))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.pos()
+            self._start_drag(event.globalPosition().toPoint())
             event.accept()
 
     def mouseMoveEvent(self, event):
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            cursor = event.globalPosition().toPoint()
-            self.keep_on_screen(cursor - self._drag_offset, QApplication.screenAt(cursor))
+            self._move_drag(event.globalPosition().toPoint())
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        self._drag_offset = None
+        self._end_drag()
         super().mouseReleaseEvent(event)
+
+    def _start_drag(self, position):
+        self._drag_offset = position - self.pos()
+
+    def _move_drag(self, position):
+        if self._drag_offset is not None:
+            self.keep_on_screen(position - self._drag_offset, QApplication.screenAt(position))
+
+    def _end_drag(self):
+        self._drag_offset = None
 
     def _tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
@@ -226,10 +310,18 @@ class Speakbar(QWidget):
 
     def closeEvent(self, event):
         self._drag_offset = None
-        event.accept()
+        event.ignore()
         self.quit()
 
     def quit(self):
-        self.controller.reset()
+        if self._closing:
+            return
+        self._closing = True
+        self.close_button.setEnabled(False)
+        self.controller.shutdown()
+
+    def _finish_quit(self):
+        self.voice.set_listening(False)
         self.tray.hide()
+        self.hide()
         QApplication.instance().quit()
