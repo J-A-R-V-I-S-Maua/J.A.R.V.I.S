@@ -3,3 +3,4 @@ openwakeword==0.6.0
 onnxruntime>=1.17,<2
 numpy>=1.26,<3
 requests>=2.31,<3
+websockets>=14,<16

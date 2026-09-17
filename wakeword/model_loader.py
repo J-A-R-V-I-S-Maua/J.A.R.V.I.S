@@ -77,6 +77,18 @@ def create_model(cancelled=lambda: False):
     )
 
 
+def create_vad(cancelled=lambda: False):
+    directory = model_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / "silero_vad.onnx"
+    check_cancelled(cancelled)
+    if not destination.is_file() or destination.stat().st_size == 0:
+        _download_model(openwakeword.VAD_MODELS["silero_vad"]["download_url"], destination, cancelled)
+    check_cancelled(cancelled)
+    return openwakeword.VAD(model_path=str(destination), n_threads=1)
+
+
 if __name__ == "__main__":
     create_model()
-    print("Modelo hey_jarvis carregado com ONNX. Nenhum microfone foi aberto.")
+    create_vad()
+    print("Modelos hey_jarvis e Silero VAD carregados com ONNX. Nenhum microfone foi aberto.")

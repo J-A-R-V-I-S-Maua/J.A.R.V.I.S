@@ -3,3 +3,4 @@ uvicorn[standard]
 celery
 redis
 python-multipart
+websockets>=14,<16
