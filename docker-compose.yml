@@ -38,6 +38,15 @@ services:
     command: celery -A task beat --loglevel=info
     restart: unless-stopped
 
+  realtime:
+    build: ./worker
+    command: uvicorn realtime:app --host 0.0.0.0 --port 8001 --ws-max-size 4096 --ws-max-queue 8
+    volumes:
+      - whisper-cache:/root/.cache/huggingface
+    expose:
+      - "8001"
+    restart: unless-stopped
+
   api:
     build: ./api
     depends_on:

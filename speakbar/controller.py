@@ -12,8 +12,8 @@ class VoiceThread(QThread):
     def __init__(self, parent=None, service_factory=None):
         super().__init__(parent)
         if service_factory is None:
-            from wakeword.detect_microphone_service import VoiceService
-            service_factory = VoiceService
+            from wakeword.detect_microphone_service import create_service
+            service_factory = create_service
         self.service = service_factory(self.event_received.emit)
 
     def run(self):
