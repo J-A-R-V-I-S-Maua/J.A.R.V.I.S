@@ -193,10 +193,11 @@ class Speakbar(QWidget):
 
     def _render_state(self, event):
         self._update_message()
-        self.message.setAccessibleName("Transcrição e estado do reconhecimento")
+        self.message.setAccessibleName("Transcrição, confirmação e estado do assistente")
         self.message.setAccessibleDescription(event.text)
         self.message.setToolTip(event.text)
-        active = event.state in (State.LISTENING, State.PROCESSING)
+        active = event.state in (State.LISTENING, State.PROCESSING, State.INTERPRETING,
+                                 State.SPEAKING, State.CONFIRMING, State.EXECUTING)
         name = "Cancelar interação" if active else "Gravar comando"
         if event.state is State.ERROR:
             name = "Tentar novamente"
@@ -205,7 +206,7 @@ class Speakbar(QWidget):
         self.voice.setAccessibleName(name)
         self.voice.setToolTip(name)
         self.voice.setEnabled(event.state not in (State.PREPARING, State.CANCELLING, State.STOPPING, State.STOPPED))
-        self.voice.set_listening(event.state is State.LISTENING)
+        self.voice.set_listening(event.state in (State.LISTENING, State.CONFIRMING))
 
     def _update_message(self):
         if self.message.toPlainText() != self.controller.text:
