@@ -5,7 +5,7 @@ Arquitetura do J.A.R.V.I.S., atualizada em 19 de setembro de 2026.
 ## Objetivo e primeira entrega
 
 Permitir que pessoas com dificuldade motora parcial ou total controlem o computador
-por linguagem natural em PT-BR. A primeira entrega abre navegador, Chrome, Edge,
+por linguagem natural em PT-BR. A entrega abre navegadores do catálogo instalado,
 Explorer e Bloco de Notas, acessa endereços e pesquisa no Google/YouTube.
 
 O ciclo é: ativação → transcrição final → interpretação local → confirmação falada →
@@ -17,6 +17,7 @@ resposta final explícita → despacho ao Windows. Parciais servem somente ao fe
 | --- | --- | --- |
 | wakeword | Host | Wake word ONNX, VAD, transporte STT e modo somente transcrição. |
 | host_agent | Host Windows | Sessão, áudio contínuo, interrupção, confirmação, SAPI e executor. |
+| host_agent.catalog / executor | Host Windows, Linux ou macOS | Descoberta local e despacho nativo de navegadores; integração por voz ainda restrita ao Windows. |
 | speakbar | Host | Apresentação Qt; captura, rede e TTS fora da thread gráfica. |
 | contracts | Host e API | Tipos Pydantic e validação comum das ações. |
 | api | Docker | Entrada HTTP/WebSocket, proxy STT e interpretação de comandos. |
@@ -53,8 +54,15 @@ Proposta → pergunta SAPI → confirmação pelo Whisper → executor Windows
   só executa após “sim”, “confirmo” ou “pode executar” como resposta final.
 - Google e YouTube são aliases conhecidos. Outros destinos exigem domínio/URL
   fornecido; somente HTTP/HTTPS sem credenciais. Consultas são codificadas na URL.
-- Navegador padrão Chrome/Edge tem prioridade; fallback Edge, depois Chrome.
-  Escolhas explícitas são respeitadas. Executáveis vêm do catálogo do Windows.
+- Catálogo: Chrome, Edge, Brave, Firefox, Chromium, Opera e Vivaldi; Safari no macOS.
+  O padrão do sistema tem prioridade quando reconhecido e instalado; as ordens de
+  alternativa por SO constam no README. Escolhas explícitas restringem o schema da
+  IA e são revalidadas no host. Navegador solicitado ausente impede a execução.
+  Caminhos, IDs Flatpak e argumentos vêm exclusivamente do catálogo local.
+- Descoberta separada por SO em `host_agent/catalog.py`: registro e diretórios no
+  Windows; PATH, Snap, Flatpak e XDG no Linux; NSWorkspace e bundles no macOS.
+  `NativeExecutor` recebe argumentos fixos do catálogo e acrescenta apenas a URL
+  validada. `WindowsExecutor` permanece como interface de compatibilidade.
 - Uma ação lógica por interação. Pedidos com escrita, cliques ou múltiplas ações
   independentes devem ser recusados por inteiro.
 
@@ -90,7 +98,9 @@ containers permanecem serviços independentes.
 
 COMMANDS_ENABLED=0 mantém somente transcrição. --demo funciona sem microfone, modelos
 ou Docker. Streaming continua padrão; batch mantém WAV, uploads e Celery. Ações são
-específicas do Windows 10/11; outros sistemas mantêm o reconhecimento.
+habilitadas por voz no Windows 10/11; outros sistemas mantêm o reconhecimento.
+O catálogo e o executor de navegadores já têm adaptadores Linux/macOS, testados com
+ambientes simulados. TTS e aceitação nativa nesses sistemas permanecem pendentes.
 
 Permanecem para depois: digitação, cliques, rolagem, fechamento de janelas, UI Automation,
 visão computacional, sequências gerais, macros, memória persistente, outros idiomas,

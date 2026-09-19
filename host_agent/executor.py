@@ -1,45 +1,10 @@
 """Catálogo nativo fechado. Nenhum caminho ou argumento de shell vem do LLM."""
-import os
-from pathlib import Path
 import subprocess
+import sys
 from urllib.parse import urlencode
 
 from contracts.commands import OpenApp, OpenUrl, SearchWeb
-
-APP_NAMES = {"browser": "navegador", "chrome": "Google Chrome", "edge": "Microsoft Edge",
-             "explorer": "Explorador de Arquivos", "notepad": "Bloco de Notas"}
-
-
-def discover_apps():
-    import winreg
-    apps = {}
-    for app, exe in (("chrome", "chrome.exe"), ("edge", "msedge.exe")):
-        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
-                try:
-                    with winreg.OpenKey(root, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}",
-                                        0, winreg.KEY_READ | view) as key:
-                        path = Path(winreg.QueryValue(key, None).strip('"'))
-                        if path.is_absolute() and path.is_file():
-                            apps.setdefault(app, str(path))
-                except OSError:
-                    pass
-    windows = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-    for app, path in (("explorer", windows / "explorer.exe"), ("notepad", windows / "System32" / "notepad.exe")):
-        if path.is_file():
-            apps[app] = str(path)
-    default = None
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice") as key:
-            progid = winreg.QueryValueEx(key, "ProgId")[0].lower()
-            default = "chrome" if progid.startswith("chromehtml") else "edge" if progid.startswith("msedgehtm") else None
-    except OSError:
-        pass
-    default = next((name for name in (default, "edge", "chrome") if name in apps), None)
-    if default:
-        apps["browser"] = apps[default]
-    return apps
+from .catalog import APP_NAMES, discover_apps
 
 
 def confirmation(action):
@@ -52,9 +17,10 @@ def confirmation(action):
     return f"Vou pesquisar {action.query} no {provider}, usando o {browser}. Posso executar?"
 
 
-class WindowsExecutor:
-    def __init__(self, apps=None, launch=None):
-        self.apps = discover_apps() if apps is None else apps
+class NativeExecutor:
+    def __init__(self, apps=None, launch=None, *, platform=None):
+        self.platform = sys.platform if platform is None else platform
+        self.apps = discover_apps(self.platform) if apps is None else apps
         self.launch = launch or self._launch
 
     @staticmethod
@@ -77,8 +43,17 @@ class WindowsExecutor:
             args = [url]
         else:
             raise ValueError("Ação desconhecida")
-        executable = self.apps.get(app)
-        if not executable:
+        target = self.apps.get(app)
+        if not target:
             raise ValueError("Aplicativo indisponível")
-        self.launch([executable, *args])
-        return "Solicitação enviada ao Windows."
+        # Tuplas vêm do catálogo local, nunca do contrato recebido da IA.
+        argv = [target] if isinstance(target, str) else list(target)
+        self.launch([*argv, *args])
+        system = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}.get(self.platform, "sistema")
+        return f"Solicitação enviada ao {system}."
+
+
+class WindowsExecutor(NativeExecutor):
+    """Compatibilidade com integrações existentes do host Windows."""
+    def __init__(self, apps=None, launch=None):
+        super().__init__(apps, launch, platform="win32")

@@ -4,14 +4,14 @@ import json
 import logging
 import os
 import time
-from typing import Literal
+from typing import Literal, get_args
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field, ValidationError
 
-from contracts.commands import (Decision, InterpretRequest, InterpretResponse, OpenApp, OpenUrl,
-                               SearchWeb, StrictModel, request_problem, request_source,
+from contracts.commands import (App, Browser, Decision, InterpretRequest, InterpretResponse, OpenApp, OpenUrl,
+                               SearchWeb, StrictModel, request_problem, request_source, requested_browsers,
                                source_urls, validate_proposal)
 
 router = APIRouter(prefix="/commands", tags=["commands"])
@@ -22,11 +22,11 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434").rstrip("/")
 class ModelProposal(StrictModel):
     """Schema plano evita ambiguidade de oneOf/discriminator no decoder do Ollama."""
     kind: Literal["open_app", "open_url", "search_web", "clarification", "unsupported"]
-    app: Literal["", "browser", "chrome", "edge", "explorer", "notepad"] = ""
+    app: App | Literal[""] = ""
     url: str = Field(default="", max_length=2048)
     query: str = Field(default="", max_length=1000)
     provider: Literal["google", "youtube"]
-    browser: Literal["default", "chrome", "edge"]
+    browser: Browser
     message: str = Field(default="", max_length=300)
 
     def decision(self):
@@ -45,12 +45,13 @@ MODEL_SYSTEM = """Interprete pedidos falados de acessibilidade em PT-BR. Retorne
 O campo text é o pedido; context descreve capacidades, aplicativos e esclarecimento.
 Escolha UMA operação pelo campo kind:
 open_app: abrir app. app=notepad (bloco de notas), explorer (explorador de arquivos),
-browser (navegador), chrome ou edge. NÃO use URLs para abrir aplicativos.
+browser (navegador), chrome, edge, brave, firefox, chromium, opera, vivaldi ou safari.
+NÃO use URLs para abrir aplicativos. Só escolha apps presentes em available_apps.
 open_url: abrir site. url precisa ser domínio/URL explicitamente informado ou alias
 Google=https://www.google.com e YouTube=https://www.youtube.com. Abrir YouTube SEM
 assunto é open_url, NÃO search_web. Nunca invente domínios ou protocolos.
 search_web: pesquisar assunto. query contém o assunto sem as palavras de comando;
-provider=google (padrão) ou youtube; browser=default, chrome ou edge conforme pedido.
+provider=google (padrão) ou youtube; browser=default ou navegador explícito conforme pedido.
 clarification: falta assunto de pesquisa ou endereço de site. message é uma pergunta.
 unsupported: escrita, cliques, fechamento, shell, arquivos ou ações não disponíveis.
 Se QUALQUER parte do pedido for não suportada, rejeite o pedido inteiro. Duas ações
@@ -63,12 +64,15 @@ a resposta a essa pergunta. Complete o pedido original com essa resposta, manten
 site de pesquisa e navegador escolhidos. Não repita uma pergunta já respondida.
 Use somente aplicativos e capacidades fornecidos. allowed_urls lista os endereços
 exatos permitidos; não acrescente www nem altere o endereço. browser sempre default
-quando o usuário não escolher explicitamente Chrome/Edge. Não deduza browser da
+quando o usuário não escolher explicitamente um navegador. Se o navegador solicitado
+não estiver disponível, retorne unsupported; nunca o substitua por outro. Não deduza browser da
 lista de aplicativos disponíveis. Campos de texto não usados ficam
 vazios. provider e browser são obrigatórios: use google/default quando não especificados.
 Exemplos:
 Abra o bloco de notas => {"kind":"open_app","app":"notepad"}
 Abra o navegador => {"kind":"open_app","app":"browser"}
+Abra o Brave => {"kind":"open_app","app":"brave","browser":"default","provider":"google"}
+Pesquise receitas no Google usando Firefox => {"kind":"search_web","query":"receitas","provider":"google","browser":"firefox"}
 Abra o explorador de arquivos => {"kind":"open_app","app":"explorer"}
 Abra o YouTube => {"kind":"open_url","url":"https://www.youtube.com"}
 Abra example.com => {"kind":"open_url","url":"https://example.com","browser":"default","provider":"google"}
@@ -103,6 +107,13 @@ async def infer(body: InterpretRequest) -> Decision:
         allowed_urls = source_urls(request_source(body))
         schema = ModelProposal.model_json_schema()
         schema["properties"]["url"]["enum"] = ["", *allowed_urls]
+        schema["properties"]["app"] = {"type": "string", "enum": ["", *body.context.available_apps]}
+        schema["properties"]["browser"]["enum"] = ["default", *(
+            app for app in body.context.available_apps if app in get_args(Browser) and app != "default")]
+        preferred = requested_browsers(body)
+        if preferred:
+            schema["properties"]["browser"]["enum"] = preferred
+            schema["properties"]["app"] = {"type": "string", "enum": ["", *preferred]}
         async with asyncio.timeout(30), httpx.AsyncClient(timeout=httpx.Timeout(30, connect=3)) as client:
             response = await client.post(f"{OLLAMA_URL}/api/chat", json={
                 "model": MODEL, "stream": False, "keep_alive": "5m",

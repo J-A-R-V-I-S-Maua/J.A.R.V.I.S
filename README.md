@@ -38,6 +38,7 @@ o host. Reconhecimento e interpretação são locais; pesquisas/sites acessam a 
 Exemplos depois de “hey jarvis”:
 
 - “Abra o Bloco de Notas”, “abra o explorador de arquivos” ou “abra o Chrome”.
+- “Abra o Brave” ou “pesquise receitas no Google usando o Firefox”, se instalados.
 - “Abra o YouTube” ou “acesse example.com”.
 - “Pesquise acessibilidade no Google” ou “pesquise receitas de pão no YouTube”.
 
@@ -49,6 +50,46 @@ voz sintetizada; o monitor de interrupção permanece ativo.
 
 “Solicitação enviada ao Windows” confirma o despacho, não o carregamento da página.
 Digitação, cliques, rolagem, fechamento e sequências gerais ainda não estão disponíveis.
+
+### Descoberta de navegadores por sistema
+
+O catálogo inclui Chrome, Edge, Brave, Firefox, Chromium, Opera e Vivaldi nos três
+sistemas, além de Safari no macOS. Só anuncia navegadores que consegue localizar;
+não instala aplicativos. Reinicie o host após instalar ou remover um navegador.
+
+| Sistema | Descoberta e seleção |
+| --- | --- |
+| Windows | Registro App Paths do usuário/máquina, visões 32/64 bits e diretórios usuais de instalação. Consulta a associação HTTPS para identificar o padrão. |
+| Linux | Executáveis no PATH, wrappers em `/snap/bin` e IDs Flatpak conhecidos instalados. Consulta `xdg-settings`, com alternativa `xdg-mime`. |
+| macOS | Consulta NSWorkspace/Launch Services e valida o identificador do bundle. Como alternativa, verifica `~/Applications`, `/Applications` e `/System/Applications`. Abre o bundle com `/usr/bin/open -a`. |
+
+Quando nenhum navegador é especificado, o padrão do sistema tem prioridade se
+reconhecido e encontrado no catálogo. Caso contrário, a ordem de alternativa é:
+
+- Windows: Edge, Chrome, Brave, Firefox, Chromium, Opera, Vivaldi.
+- Linux: Firefox, Chrome, Chromium, Brave, Edge, Opera, Vivaldi.
+- macOS: Safari, Chrome, Firefox, Brave, Edge, Chromium, Opera, Vivaldi.
+
+Pedidos explícitos como “usando o Firefox” restringem a escolha enviada à IA e são
+validados novamente no host. Um navegador ausente não é substituído silenciosamente.
+Instalações portáteis fora dos locais consultados, canais beta e navegadores fora
+do catálogo não têm descoberta garantida. No Linux, IDs desktop desconhecidos não
+são executados; comandos `Exec` desses arquivos não são interpretados pelo projeto.
+
+Para consultar o catálogo local sem abrir navegadores, microfone ou Docker, com a
+venv ativada, execute `python -m host_agent.catalog`.
+
+**Compatibilidade:** catálogo e executor de navegadores possuem implementações para
+Windows, Linux e macOS. O ciclo integrado de ações por voz continua habilitado apenas
+no Windows, pois usa SAPI; Linux/macOS seguem com transcrição até a implementação e
+validação de TTS/interrupção nesses sistemas. Explorer e Bloco de Notas são exclusivos
+do Windows. Os adaptadores Linux/macOS foram testados com ambientes simulados, ainda
+sem aceitação em desktops nativos.
+
+Referências das interfaces: [registro de aplicativos no Windows](https://learn.microsoft.com/en-us/windows/win32/shell/app-registration),
+[xdg-utils](https://wiki.freedesktop.org/www/Software/xdg-utils/),
+[Flatpak](https://docs.flatpak.org/en/latest/using-flatpak.html) e
+[NSWorkspace](https://developer.apple.com/documentation/appkit/nsworkspace).
 
 Para preservar somente a transcrição anterior:
 

@@ -554,3 +554,43 @@ A revisão automática bloqueou as tentativas de exclusão dos caches `__pycache
 e `.pytest_cache` do projeto e da cópia aninhada do Vosk, com a mensagem
 “blocked by policy”, sem motivo detalhado. Esses materiais continuam no disco;
 a limpeza foi parcial. Nenhum mecanismo alternativo de exclusão foi utilizado.
+
+## 15. Catálogo de navegadores por sistema operacional — 19/09/2026
+
+Criado `host_agent/catalog.py`, separando descoberta de aplicativos e execução.
+O catálogo inclui Chrome, Edge, Brave, Firefox, Chromium, Opera e Vivaldi no
+Windows/Linux/macOS, além de Safari no macOS. No Windows, consulta App Paths em
+HKCU/HKLM, visões 32/64 bits e diretórios usuais; no Linux, PATH, Snap e IDs Flatpak
+conhecidos; no macOS, NSWorkspace e bundles validados pelo identificador.
+Instalações fora dessas formas e canais beta não têm descoberta garantida.
+
+O navegador padrão reconhecido e instalado tem prioridade sobre alternativas
+documentadas por sistema. Escolhas explícitas não podem ser substituídas por
+outro navegador. Contratos e schema da API incluem os novos IDs, limitados aos
+aplicativos descobertos no contexto. Executáveis e argumentos permanecem definidos
+no host; não são aceitos comandos Exec de arquivos desktop nem shell livre.
+
+`NativeExecutor` permite despachar os alvos locais nos três sistemas;
+`WindowsExecutor` mantém compatibilidade com integrações anteriores. O coordenador
+usa o novo executor. `python -m host_agent.catalog` permite consultar o catálogo
+sem abrir microfone, navegador ou Docker.
+
+Na descoberta real deste Windows foram encontrados Chrome, Edge e Brave, com Brave
+como padrão. O primeiro teste com o modelo real devolveu browser=default mesmo
+quando o pedido dizia “usando o Brave”. A escolha explícita passou a restringir o
+schema da IA e a ser conferida novamente no host. Foram adicionados testes para
+esse caso, navegador ausente, consulta sobre um navegador sem selecioná-lo,
+descoberta por SO, instalações Snap/Flatpak, bundles inválidos e timeout de consultas.
+
+Validação: **83 testes aprovados**, com dois avisos de depreciação de dependências.
+A API Docker foi reconstruída e cinco cenários com Qwen3 real passaram sem despachar
+aplicativos: abrir Brave; pesquisar usando Brave; recusar Firefox ausente; abrir
+Firefox em catálogo simulado; abrir YouTube usando Safari em catálogo simulado.
+As quatro interpretações pelo modelo aquecido ficaram entre **1,141 s e 1,453 s**;
+a recusa de navegador ausente ocorreu em **0,015 s**, antes de consultar o modelo.
+
+Linux e macOS foram cobertos por testes com ambiente simulado. Não houve aceitação
+em desktops nativos desses sistemas nesta etapa. O fluxo completo por voz continua
+habilitado apenas no Windows por depender do SAPI; portar TTS/interrupção e validar
+a integração nos demais sistemas permanece como trabalho futuro. README e resumo
+de arquitetura distinguem essa limitação do catálogo e executor multiplataforma.

@@ -6,10 +6,16 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-Browser = Literal["default", "chrome", "edge"]
-App = Literal["browser", "chrome", "edge", "explorer", "notepad"]
+Browser = Literal["default", "chrome", "edge", "brave", "firefox", "chromium", "opera", "vivaldi", "safari"]
+App = Literal["browser", "chrome", "edge", "brave", "firefox", "chromium", "opera", "vivaldi", "safari", "explorer", "notepad"]
 CAPABILITIES = ["open_app", "open_url", "search_web"]
 SITE_ALIASES = {"google": "https://www.google.com", "youtube": "https://www.youtube.com"}
+BROWSER_ALIASES = {
+    "chrome": ("google chrome", "chrome"), "edge": ("microsoft edge", "edge"),
+    "brave": ("brave",), "firefox": ("mozilla firefox", "firefox"),
+    "chromium": ("chromium",), "opera": ("opera",),
+    "vivaldi": ("vivaldi",), "safari": ("safari",),
+}
 EMPTY_SEARCH = re.compile(
     r"(?:por favor )?(?:eu )?"
     r"(?:(?:gostaria|quero|queria|preciso|pode|poderia)(?: de| que voce)? )?"
@@ -124,11 +130,35 @@ def source_urls(source):
     return sorted(allowed)
 
 
+def requested_browsers(request):
+    """Preferências explícitas, sem confundir 'pesquise sobre Firefox' com seleção."""
+    found = set()
+    for text in (request.context.original_text, request.text):
+        if not text:
+            continue
+        source = normalize(text)
+        prefix = (
+            r"(?:^(?:por favor )?(?:eu )?(?:(?:quero|gostaria|preciso)(?: de)? )?"
+            r"(?:abra|abre|abrir|inicie|iniciar) (?:o )?(?:navegador )?|"
+            r"\b(?:usando|utilizando|atraves do|pelo|com o navegador|no navegador) "
+            r"(?:o )?(?:navegador )?)"
+        )
+        for app, aliases in BROWSER_ALIASES.items():
+            if re.search(prefix + "(?:" + "|".join(map(re.escape, aliases)) + r")\b", source):
+                found.add(app)
+    return sorted(found)
+
+
 def request_problem(request):
     """Guardas conservadoras para ambiguidades observadas nos testes do modelo."""
     source = normalize(request_source(request))
     if re.search(r"\b(?:e|depois|em seguida|tambem) (?:por favor )?(?:abra|abre|abrir|inicie|iniciar)\b", source):
         return Decision(status="unsupported", message="Faça um pedido de abertura por vez.")
+    browsers = requested_browsers(request)
+    if len(browsers) > 1:
+        return Decision(status="unsupported", message="Escolha um navegador por pedido.")
+    if browsers and browsers[0] not in request.context.available_apps:
+        return Decision(status="unsupported", message="O navegador solicitado não está disponível neste computador.")
     if EMPTY_SEARCH.fullmatch(source):
         return Decision(status="clarification", message="O que deseja pesquisar?")
     return None
@@ -145,11 +175,16 @@ def validate_proposal(decision: Decision, request: InterpretRequest) -> Decision
     available = request.context.available_apps
     if action.kind not in request.context.capabilities:
         raise ValueError("Capacidade indisponível")
+    browsers = requested_browsers(request)
+    selected = action.app if isinstance(action, OpenApp) else action.browser
+    if browsers and selected != browsers[0]:
+        raise ValueError("A proposta não respeitou o navegador solicitado")
     if isinstance(action, OpenApp):
         if action.app not in available:
             raise ValueError("Aplicativo indisponível")
     else:
-        if "browser" not in available or (action.browser != "default" and action.browser not in available):
+        browser = "browser" if action.browser == "default" else action.browser
+        if browser not in available:
             raise ValueError("Navegador indisponível")
     if isinstance(action, OpenUrl):
         if action.url.rstrip("/") not in source_urls(request_source(request)):

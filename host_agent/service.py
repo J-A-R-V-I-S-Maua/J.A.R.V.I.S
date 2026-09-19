@@ -9,7 +9,7 @@ from contracts.commands import CommandContext, Decision, InterpretRequest, norma
 from wakeword.detect_microphone_service import VoiceService, DETECTION_THRESHOLD
 from wakeword.events import Cancelled, State, check_cancelled
 from .client import CommandClient
-from .executor import WindowsExecutor, confirmation
+from .executor import NativeExecutor, confirmation
 from .interrupt import InterruptDetector
 from .speech import Microphone, SpeechInput
 from .tts import WindowsSpeech
@@ -170,7 +170,7 @@ class AssistantService(VoiceService):
             self._publish(State.PREPARING)
             model = self.model_factory(self.stop_requested.is_set)
             vad = create_vad(self.stop_requested.is_set)
-            self.executor = self.executor or WindowsExecutor()
+            self.executor = self.executor or NativeExecutor()
             detector = None
             try:
                 detector = self.detector_factory(self.stop_requested.is_set)
