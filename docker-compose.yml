@@ -47,8 +47,23 @@ services:
       - "8001"
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:0.34.2
+    environment:
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_CONTEXT_LENGTH=4096
+      - OLLAMA_NO_CLOUD=1
+    volumes:
+      - ollama-models:/root/.ollama
+    expose:
+      - "11434"
+    restart: unless-stopped
+
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -56,6 +71,8 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_BACKEND_URL=redis://redis:6379/0
       - AUDIO_UPLOAD_DIR=/app/audio_uploads
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b-instruct}
     ports:
       - "8000:8000"
     volumes:
@@ -66,3 +83,4 @@ volumes:
   redis-data:
   whisper-cache:
   audio-uploads:
+  ollama-models:

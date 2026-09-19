@@ -1,97 +1,102 @@
 # Agente de Voz para Acessibilidade Motora
 
-Resumo do projeto — arquitetura, decisões de escopo e plano de MVP de 3 meses.
+Arquitetura do J.A.R.V.I.S., atualizada em 19 de setembro de 2026.
 
-## Visão geral
+## Objetivo e primeira entrega
 
-Sistema de agente controlado por voz capaz de realizar ações no computador — pesquisas, cliques de mouse, digitação, abertura de aplicativos, entre outros — a partir de comandos falados. O foco do projeto é acessibilidade: atender pessoas com deficiência motora, **parcial ou total**, que têm dificuldade ou impossibilidade de usar mouse e teclado convencionais.
+Permitir que pessoas com dificuldade motora parcial ou total controlem o computador
+por linguagem natural em PT-BR. A primeira entrega abre navegador, Chrome, Edge,
+Explorer e Bloco de Notas, acessa endereços e pesquisa no Google/YouTube.
 
-Por trás da orquestração está um modelo de IA (LLM) responsável por interpretar a intenção por trás dos comandos de voz e traduzi-la em ações concretas no sistema operacional — não um conjunto fixo de comandos de sintaxe rígida.
+O ciclo é: ativação → transcrição final → interpretação local → confirmação falada →
+resposta final explícita → despacho ao Windows. Parciais servem somente ao feedback.
 
-**Benchmark de referência:** Windows Voice Access. O diferencial do projeto é a compreensão de linguagem natural e comandos compostos (ex: *"abre o e-mail e responde pro João dizendo que vou chegar atrasado"*), em vez da sintaxe fixa do Voice Access (*"clique 7"*, *"role para baixo"*).
+## Divisão entre host e Docker
 
-## Como funciona (conceito)
+| Componente | Local | Responsabilidade |
+| --- | --- | --- |
+| wakeword | Host | Wake word ONNX, VAD, transporte STT e modo somente transcrição. |
+| host_agent | Host Windows | Sessão, áudio contínuo, interrupção, confirmação, SAPI e executor. |
+| speakbar | Host | Apresentação Qt; captura, rede e TTS fora da thread gráfica. |
+| contracts | Host e API | Tipos Pydantic e validação comum das ações. |
+| api | Docker | Entrada HTTP/WebSocket, proxy STT e interpretação de comandos. |
+| realtime | Docker | Whisper base, CPU INT8, uma conexão por vez. |
+| ollama | Docker | Qwen3 4B Instruct Q4_K_M, contexto 4096, processamento local. |
+| Redis, worker e beat | Docker | Transcrição batch e retenção de uploads preservadas. |
 
-1. Usuário ativa o agente por voz (wake word) e fala um comando
-2. O agente transcreve a fala e interpreta a intenção
-3. Antes de agir, o agente **confirma por voz** o que entendeu
-4. Após confirmação, executa a ação (clique, digitação, abertura de app etc.)
-5. Um comando de emergência ("parar", "cancelar") interrompe qualquer ação a qualquer momento, com prioridade máxima
+Ollama deixa de ser uma fase futura. A confirmação sonora e a sessão passam ao host,
+junto do executor e da interrupção. A API não tem acesso ao desktop. Não há fallback
+para nuvem. O STT, originalmente planejado no host, já roda no Docker desde o streaming.
 
-## Arquitetura
-
-O sistema é dividido em duas camadas, porque containers Docker não têm acesso nativo a mouse, teclado e tela do Windows — isso exige um componente nativo no host com permissões reais de input, separado da camada de "inteligência", que pode ser containerizada.
-
-```
-┌─────────────────────────────┐        ┌──────────────────────────────┐
-│   HOST WINDOWS (nativo)     │        │   DOCKER (containers)         │
-│                              │        │                                │
-│  • Wake word + STT local    │◄──────►│  • Orquestrador / router      │
-│  • Percepção de tela         │        │  • LLM local (Ollama) [fase 2]│
-│    (UI Automation)           │        │  • Confirmação (TTS) + sessão │
-│  • Executor de ações         │        │                                │
-│    (clique, digitação, stop) │        └──────────────┬─────────────────┘
-└─────────────────────────────┘                       │
-                                                        ▼
-                                          ┌──────────────────────────┐
-                                          │   Claude API (nuvem)      │
-                                          │   comandos complexos      │
-                                          └──────────────────────────┘
+```text
+Microfone no Windows ──┬── Wake word/VAD → API → Whisper
+                      └── Vosk → interrupção do coordenador
+Texto final → coordenador → API → Ollama → proposta validada
+Proposta → pergunta SAPI → confirmação pelo Whisper → executor Windows
+                       ↘ estados e texto na speakbar
 ```
 
-| Serviço | Onde roda | Responsabilidade |
-|---|---|---|
-| Wake word + STT local | Host | Ativação por voz e transcrição, baixa latência |
-| Percepção de tela | Host | Lê a árvore de elementos clicáveis (UI Automation) |
-| Executor de ações | Host | Executa clique, digitação e o comando de parada de emergência |
-| Orquestrador / router | Docker | Decide entre regra determinística (rápida) ou LLM (nuvem/local) |
-| LLM local (Ollama) | Docker | Comandos simples e frequentes — **planejado para fase 2** |
-| Confirmação (TTS) + sessão | Docker | Pergunta antes de agir; guarda contexto e histórico (Redis) |
-| Claude API | Nuvem | Interpreta comandos complexos e ambíguos |
+## Contratos e autorização
 
-## Decisões de design
+- POST /commands/interpret recebe interaction_id, text e context: idioma, aplicativos,
+  capacidades e eventual esclarecimento pendente.
+- Resposta: interaction_id, status (action, clarification ou unsupported), action
+  tipada ou nula e message em PT-BR. A API converte a saída estruturada plana do modelo
+  para a união de ações compartilhada com o host.
+- Esclarecimentos são apresentados ao modelo como diálogo: pedido original, pergunta
+  do assistente e resposta, mantendo o destino e o navegador do pedido.
+- Ações: open_app(app), open_url(url, browser), search_web(query, provider, browser).
+  Não existe operação de shell ou código livre.
+- GET /commands/health informa disponibilidade do Ollama e presença do modelo,
+  sem bloquear a transcrição.
+- O host valida novamente a proposta, constrói a pergunta usando seus parâmetros e
+  só executa após “sim”, “confirmo” ou “pode executar” como resposta final.
+- Google e YouTube são aliases conhecidos. Outros destinos exigem domínio/URL
+  fornecido; somente HTTP/HTTPS sem credenciais. Consultas são codificadas na URL.
+- Navegador padrão Chrome/Edge tem prioridade; fallback Edge, depois Chrome.
+  Escolhas explícitas são respeitadas. Executáveis vêm do catálogo do Windows.
+- Uma ação lógica por interação. Pedidos com escrita, cliques ou múltiplas ações
+  independentes devem ser recusados por inteiro.
 
-- **Perfil de usuário do MVP:** ambos os perfis (deficiência parcial e total) atendidos desde o início
-- **Processamento de IA:** híbrido — caminho rápido local para comandos simples, nuvem (Claude API) para comandos complexos
-- **Tratamento de erro de interpretação:** confirmação por voz obrigatória antes de qualquer ação
+## Sessão, áudio e falhas
 
-## Escopo do MVP (3 meses)
+O coordenador mantém uma interação por vez, com identificadores separados para
+interação e captura. Uma thread possui o microfone e distribui PCM16 mono de 16 kHz
+em blocos de 80 ms. Filas são limitadas; perder áudio durante captura gera erro.
 
-**Entra:**
-- Windows 10/11, apenas português (PT-BR)
-- 3 apps-alvo: navegador (Chrome/Edge), Explorer, Notepad ou Word
-- ~20-30 comandos priorizados (abrir app, clicar, digitar, rolar, fechar, desfazer)
-- Confirmação por voz antes de agir + comando de emergência
-- Roteamento híbrido qualitativo: regras determinísticas (substituindo o LLM local por enquanto) + Claude API
+Vosk reconhece interrupções: “parar”, “pare”, “cancelar”, “parar agora” e “cancelar
+comando”. A forma reconhecida “para” também é aceita. O resultado precisa ser uma
+frase final isolada: consultas como “pesquise como parar de fumar” não devem cancelar.
+Vosk não substitui o Whisper para pedidos e confirmações nem autoriza ações.
 
-**Fica para depois (fase 2):**
-- LLM local (Ollama)
-- Fallback de visão computacional para apps sem árvore de acessibilidade
-- Macros e perfis personalizados por usuário
-- Outros idiomas e outros sistemas operacionais
+A próxima captura é preparada antes da pergunta. Durante o TTS não são aceitos novos
+pedidos nem confirmações; os buffers são descartados após a fala e uma curta cauda
+acústica. O detector de interrupção continua ativo durante processamento e TTS.
 
-## Equipe e recursos
+A confirmação tem limite de 30 segundos, incluindo transcrição, com uma repetição
+se inconclusiva. Informações faltantes permitem um esclarecimento por voz. Sessão e
+autorização ficam em memória e não são recuperadas depois de reiniciar o aplicativo.
 
-- **Time:** pequeno, de 3 a 5 pessoas
-- **Dedicação:** fins de semana e horas livres (part-time)
-- **Orçamento:** limitado — poucos dólares por mês, concentrado na API da Claude (o diferencial de compreensão de linguagem natural do produto)
+Cancelamento interrompe TTS, invalida respostas pendentes e impede o próximo despacho.
+Uma abertura já entregue ao Windows não é desfeita. Reconhecimento tem latência e
+depende da qualidade acústica; não há garantia de tempo real rígido.
 
-## Cronograma resumido (12 fins de semana)
+Falhas no TTS ou no detector impedem ações e preservam transcrição. Falhas no Ollama
+permitem novo pedido por wake word ou botão. Falha no microfone exige recuperar o
+dispositivo e tentar novamente. X/Alt+F4 encerra o host e libera seus recursos;
+containers permanecem serviços independentes.
 
-| Mês | Foco | Marco |
-|---|---|---|
-| 1 | Fundação: wake word, STT local, UI Automation, executor, conexão host↔orquestrador | Loop básico com 5 comandos fixos, sem IA nem confirmação |
-| 2 | Inteligência: integração com Claude API, confirmação por voz, sessão/Redis, comando de emergência | Loop completo com confirmação, fallback de LLM e parada de emergência |
-| 3 | Consolidação: docker-compose, empacotamento do host agent, testes com usuários reais, documentação | MVP validado com usuários reais nos 3 apps-alvo |
+## Compatibilidade e evolução
 
-## Principais riscos
+COMMANDS_ENABLED=0 mantém somente transcrição. --demo funciona sem microfone, modelos
+ou Docker. Streaming continua padrão; batch mantém WAV, uploads e Celery. Ações são
+específicas do Windows 10/11; outros sistemas mantêm o reconhecimento.
 
-- **Latência ponta a ponta** entre falar e a ação acontecer
-- **Precisão do STT em PT-BR** com fala atípica (deficiências motoras que coexistem com dificuldades de fala)
-- **Cobertura limitada da UI Automation** em apps sem árvore de acessibilidade completa
-- **Fadiga de confirmação** em sequências longas de comandos
-- **Scope creep** — risco elevado em time part-time de fim de semana; a lista de itens "fica para depois" deve ser tratada como compromisso do time
+Permanecem para depois: digitação, cliques, rolagem, fechamento de janelas, UI Automation,
+visão computacional, sequências gerais, macros, memória persistente, outros idiomas,
+Claude/nuvem e empacotamento. O MVP mais amplo continua como direção futura.
 
-## Critério de sucesso do MVP
-
-Um usuário com deficiência motora consegue, só de voz, abrir o navegador, navegar até um site, digitar uma busca e fechar o app — com confirmação em cada passo e possibilidade de cancelar/parar a qualquer momento — nos 3 apps-alvo, com latência aceitável e sem travar.
+Testes automatizados de regressão acompanham o código. O roteiro temporário de
+validação com áudio sintético foi removido após a conclusão desta fase.
+A aceitação com fala real de usuários com dificuldade motora continua necessária.
+Os resultados efetivamente medidos constam no histórico de evolução.

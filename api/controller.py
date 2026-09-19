@@ -10,6 +10,8 @@ from fastapi import FastAPI, UploadFile, File, Form
 app = FastAPI()
 from streaming import router as streaming_router
 app.include_router(streaming_router)
+from commands import router as commands_router
+app.include_router(commands_router)
 
 celery_app = Celery(
     broker=os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"),

@@ -1,17 +1,67 @@
 # J.A.R.V.I.S
 
-J.A.R.V.I.S. (Janela de Apoio e Reconhecimento Virtual de Inclusão) é uma solução computacional baseada em IA que promove a acessibilidade digital para pessoas com dificuldades motoras. Por meio de comandos de voz, permite controlar o computador, escrever textos, mover o mouse, abrir programas e enviar e-mails.
+J.A.R.V.I.S. (Janela de Apoio e Reconhecimento Virtual de Inclusão) é um projeto de acessibilidade digital para pessoas com dificuldades motoras. Seu objetivo é permitir o controle do computador por voz. Nesta entrega, reconhece pedidos, confirma por voz e abre aplicativos, sites e pesquisas; digitação, controle do mouse e e-mails permanecem como etapas futuras.
 
 ## Speakbar integrada ao reconhecimento de voz
 
-Na raiz do projeto, instale as dependências do host (interface e reconhecimento).
-No PowerShell, usando a venv existente:
+No Windows, o assistente agora interpreta pedidos com **IA local**, confirma por voz
+e abre aplicativos, sites e pesquisas. Diga “parar” ou “cancelar” como uma frase isolada
+para interromper. O botão também cancela; uma abertura já entregue ao Windows não é desfeita.
+
+### Preparar IA local no Windows
 
 ```powershell
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+# Escolha CPU:
 docker compose up --build -d
+# Ou NVIDIA (validada com GTX 1060 de 6 GB):
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
+docker compose exec ollama ollama pull qwen3:4b-instruct
+# Aquecimento opcional, sem executar ações no computador:
+docker compose exec ollama ollama run qwen3:4b-instruct "Responda apenas: pronto."
+.venv\Scripts\python.exe -m host_agent.interrupt
+Invoke-RestMethod http://localhost:8000/commands/health
 .venv\Scripts\python.exe main.py
 ```
+
+Escolha uma das configurações Compose e use a mesma nos próximos `up` para preservar
+a opção de GPU. O download do Qwen3 4B Instruct reutiliza o volume `ollama-models`.
+O primeiro pedido pode ser mais lento pelo carregamento; o modelo permanece aquecido
+por cinco minutos após cada chamada. `docker compose exec ollama ollama ps` mostra
+uso de GPU/CPU. O Ollama fica acessível somente pela rede interna do Docker.
+
+A confirmação usa uma voz PT-BR instalada no Windows (Microsoft Maria neste ambiente).
+O Vosk pequeno é baixado para `~/.cache/jarvis/vosk-model-small-pt-0.3`. Falhas nesses
+componentes impedem ações e preservam transcrição; após corrigir a preparação, reinicie
+o host. Reconhecimento e interpretação são locais; pesquisas/sites acessam a internet.
+
+Exemplos depois de “hey jarvis”:
+
+- “Abra o Bloco de Notas”, “abra o explorador de arquivos” ou “abra o Chrome”.
+- “Abra o YouTube” ou “acesse example.com”.
+- “Pesquise acessibilidade no Google” ou “pesquise receitas de pão no YouTube”.
+
+O assistente fala a proposta e escuta a resposta sem outra wake word. Depois da pergunta,
+responda “sim”, “confirmo” ou “pode executar”; “não” cancela. Há até 30 segundos para
+responder e uma repetição se inconclusiva. Somente transcrições finais autorizam ações.
+Durante a pergunta, confirmações são descartadas para evitar autorização pela própria
+voz sintetizada; o monitor de interrupção permanece ativo.
+
+“Solicitação enviada ao Windows” confirma o despacho, não o carregamento da página.
+Digitação, cliques, rolagem, fechamento e sequências gerais ainda não estão disponíveis.
+
+Para preservar somente a transcrição anterior:
+
+```powershell
+$env:COMMANDS_ENABLED = "0"
+.venv\Scripts\python.exe main.py
+# Reativar ações na próxima execução:
+Remove-Item Env:COMMANDS_ENABLED
+```
+
+### Reconhecimento e interface
+
+Após a preparação acima, execute `.venv\Scripts\python.exe main.py` na raiz do projeto.
 
 O Docker Desktop precisa estar em execução antes de iniciar os containers.
 A transcrição em streaming exige a API e o novo serviço `realtime` disponíveis.
@@ -26,8 +76,9 @@ A demonstração `--demo` continua funcionando sem Docker.
 - Após aproximadamente **2 segundos de silêncio**, a captura termina. A última parcial
   permanece visível enquanto o servidor finaliza; depois é substituída pelo resultado final.
   Sem fala, a interação termina após **10 segundos**; cada comando dura no máximo **30 segundos**.
-- A frase final permanece até o próximo comando.
-  A wake word volta a ficar ativa enquanto esse resultado continua visível.
+- Com ações habilitadas, o texto final segue para a IA e a barra mostra interpretação,
+  pergunta, confirmação e resultado. No modo somente transcrição, a frase final permanece.
+  A wake word volta ao término da interação.
 - A barra expande para até três linhas. Textos maiores têm rolagem por mouse e teclado.
   Arraste a área central para reposicioná-la; a posição não é salva.
 - Clique novamente nas ondas durante captura ou transcrição para cancelar.
@@ -42,7 +93,8 @@ A demonstração `--demo` continua funcionando sem Docker.
 
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
 ou uploads gravados no servidor. As gravações anteriores são preservadas.
-Não há execução de comandos por IA ou confirmação por voz nesta etapa.
+No Windows, ações e confirmação por voz ficam habilitadas por padrão;
+`COMMANDS_ENABLED=0` preserva o reconhecimento isolado.
 A aparência preserva transparência e gradiente, sem desfoque nativo.
 
 ### Modos de execução
@@ -57,8 +109,9 @@ python -m speakbar --demo            # demonstração sem microfone, modelos ou 
 ```
 
 `python main.py --demo` também abre a demonstração. Para usar apenas a demonstração,
-basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
-`wakeword/requirements.txt`. O requirements da raiz referencia ambos, sem duplicá-los.
+basta instalar `speakbar/requirements.txt`; para o terminal com ações, instale o
+requirements da raiz. `wakeword/requirements.txt` atende o terminal somente de
+transcrição (`COMMANDS_ENABLED=0`).
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
 
@@ -72,6 +125,9 @@ O serviço `realtime` atende uma conexão de reconhecimento por vez.
 | `STREAM_MAX_SECONDS` | `30` | Duração máxima da interação, incluindo espera inicial. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
+| `COMMANDS_ENABLED` | `1` no Windows | `0` preserva somente transcrição; outros sistemas não executam ações. |
+| `OLLAMA_MODEL` | `qwen3:4b-instruct` | Modelo do backend; definir antes de recriar a API e baixar o mesmo modelo. |
+| `INTERRUPT_MODEL_DIR` | cache do usuário | Caminho de um modelo Vosk PT já extraído no host. |
 
 Os três tempos de streaming aceitam números positivos até 30 segundos. Para pausas
 maiores durante a fala, aumente `STREAM_SILENCE_SECONDS`, respeitando a duração máxima.
@@ -97,7 +153,9 @@ de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
 
 ### Organização da integração
 
-- `wakeword` possui o único stream do microfone, wake word ONNX e Silero VAD. Envia PCM16
+- Com ações habilitadas, `host_agent` possui o único stream do microfone, distribui
+  áudio para wake word ONNX, Silero VAD e interrupção Vosk. `wakeword` preserva o modo
+  independente de transcrição. O reconhecimento recebe PCM16
   mono a 16 kHz em blocos de 80 ms; uma thread de transporte recebe parciais simultaneamente.
 - `speakbar` recebe eventos pelo controlador Qt. Captura, modelos e rede ficam fora da
   thread gráfica; as ondas animam apenas durante a captura.
@@ -109,7 +167,21 @@ de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
 - Uploads manuais e GET `/transcribe/{task_id}/status` permanecem disponíveis. O modelo
   Whisper do worker Celery, a retenção de uploads e os resultados desses endpoints não mudaram.
 
-Protocolo de streaming: [docs/streaming.md](docs/streaming.md).
+Arquitetura atual: [ResumoArquitetura.md](ResumoArquitetura.md).
+
+### Testes
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest -q
+```
+
+Os testes automatizados não abrem aplicativos e permanecem no repositório para
+verificar contratos, confirmação, cancelamento e controle de áudio. O roteiro
+temporário de validação sintética foi removido após esta fase; os resultados medidos
+permanecem em [HistoricoEvolucao.md](HistoricoEvolucao.md). A validação com fala humana
+e microfone continua necessária.
+
 ## Reconhecimento de voz e modelos
 
 O serviço de voz escuta o wake word **"hey jarvis"** no microfone.
