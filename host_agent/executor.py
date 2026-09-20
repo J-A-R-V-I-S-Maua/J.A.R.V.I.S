@@ -1,16 +1,20 @@
-"""Catálogo nativo fechado. Nenhum caminho ou argumento de shell vem do LLM."""
-import subprocess
+"""Lançamento local verificado. Fechamento pertence ao coordenador e RunningApps."""
 import sys
 from urllib.parse import urlencode
 
-from contracts.commands import OpenApp, OpenUrl, SearchWeb
-from .catalog import APP_NAMES, discover_apps
+from contracts.commands import OpenApp, OpenUrl, SearchWeb, CloseApp
+from .catalog import Catalog
+from .platform_apps import launch
 
 
-def confirmation(action):
+def confirmation(action, context):
+    entries = {a.id: a for a in context.available_apps + context.running_apps}
+    if isinstance(action, CloseApp):
+        return f"Vou fechar o aplicativo {entries[action.target_id].name}, incluindo todas as suas janelas. Posso executar?"
     if isinstance(action, OpenApp):
-        return f"Vou abrir o {APP_NAMES[action.app]}. Posso executar?"
-    browser = "navegador" if action.browser == "default" else APP_NAMES[action.browser]
+        return f"Vou abrir o {entries[action.app].name}. Posso executar?"
+    identifier = context.default_browser if action.browser == "default" else action.browser
+    browser = entries[identifier].name
     if isinstance(action, OpenUrl):
         return f"Vou abrir {action.url} no {browser}. Posso executar?"
     provider = "Google" if action.provider == "google" else "YouTube"
@@ -18,42 +22,44 @@ def confirmation(action):
 
 
 class NativeExecutor:
-    def __init__(self, apps=None, launch=None, *, platform=None):
-        self.platform = sys.platform if platform is None else platform
-        self.apps = discover_apps(self.platform) if apps is None else apps
-        self.launch = launch or self._launch
+    def __init__(self, catalog=None, launcher=launch):
+        self.catalog = catalog or Catalog()
+        self.launcher = launcher
+        self.entries = {}
 
-    @staticmethod
-    def _launch(argv):
-        return subprocess.Popen(argv, shell=False, close_fds=True)
+    def start(self):
+        self.catalog.start()
 
-    def execute(self, action):
-        # A autorização e a exclusão mútua do despacho pertencem ao coordenador.
+    def close(self):
+        self.catalog.close()
+
+    def context(self, text, running=(), **kwargs):
+        context, self.entries = self.catalog.select(text, running, **kwargs)
+        return context
+
+    def execute(self, action, context):
         if isinstance(action, OpenApp):
-            app = action.app
-            args = []
+            identifier, url = action.app, None
         elif isinstance(action, (OpenUrl, SearchWeb)):
-            app = "browser" if action.browser == "default" else action.browser
+            identifier = context.default_browser if action.browser == "default" else action.browser
             if isinstance(action, OpenUrl):
                 url = action.url
             elif action.provider == "youtube":
                 url = "https://www.youtube.com/results?" + urlencode({"search_query": action.query})
             else:
                 url = "https://www.google.com/search?" + urlencode({"q": action.query})
-            args = [url]
         else:
             raise ValueError("Ação desconhecida")
-        target = self.apps.get(app)
-        if not target:
+        entry = self.entries.get(identifier)
+        if not entry:
             raise ValueError("Aplicativo indisponível")
-        # Tuplas vêm do catálogo local, nunca do contrato recebido da IA.
-        argv = [target] if isinstance(target, str) else list(target)
-        self.launch([*argv, *args])
-        system = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}.get(self.platform, "sistema")
+        entry.verify()
+        current = self.catalog.snapshot().get(identifier)
+        if not current or current != entry:
+            raise ValueError("O catálogo mudou. Faça um novo pedido.")
+        self.launcher(entry, url)
+        system = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}.get(sys.platform, "sistema")
         return f"Solicitação enviada ao {system}."
 
 
-class WindowsExecutor(NativeExecutor):
-    """Compatibilidade com integrações existentes do host Windows."""
-    def __init__(self, apps=None, launch=None):
-        super().__init__(apps, launch, platform="win32")
+WindowsExecutor = NativeExecutor

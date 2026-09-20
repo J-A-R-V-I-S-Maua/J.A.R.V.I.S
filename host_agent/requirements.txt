@@ -1,4 +1,9 @@
 pydantic>=2.10,<3
 httpx>=0.27,<1
 pywin32>=308; sys_platform == "win32"
-vosk==0.3.45; sys_platform == "win32"
+vosk==0.3.45; sys_platform == "win32" or sys_platform == "linux"
+vosk==0.3.42; sys_platform == "darwin"
+psutil>=6,<8
+pyobjc-framework-Cocoa>=10,<13; sys_platform == "darwin"
+PyGObject>=3.48,<3.52; sys_platform == "linux"
+python-xlib>=0.33,<0.34; sys_platform == "linux"
