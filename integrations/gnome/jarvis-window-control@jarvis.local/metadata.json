@@ -1,0 +1,7 @@
+{
+  "uuid": "jarvis-window-control@jarvis.local",
+  "name": "JARVIS Window Control",
+  "description": "Consulta e fechamento normal de janelas para o JARVIS, sem execução de código remoto.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "version": 1
+}

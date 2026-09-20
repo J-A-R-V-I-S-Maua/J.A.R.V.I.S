@@ -5,14 +5,15 @@ import uuid
 
 import numpy as np
 
-from contracts.commands import CommandContext, Decision, InterpretRequest, normalize, validate_proposal
+from contracts.commands import CloseApp, Decision, InterpretRequest, normalize, validate_proposal
 from wakeword.detect_microphone_service import VoiceService, DETECTION_THRESHOLD
 from wakeword.events import Cancelled, State, check_cancelled
 from .client import CommandClient
 from .executor import NativeExecutor, confirmation
 from .interrupt import InterruptDetector
 from .speech import Microphone, SpeechInput
-from .tts import WindowsSpeech
+from .tts import create_speech
+from .running import RunningApps
 
 ACTIVE = {State.LISTENING, State.PROCESSING, State.INTERPRETING, State.SPEAKING,
           State.CONFIRMING, State.EXECUTING}
@@ -23,7 +24,7 @@ NO = {"nao", "nao execute", "cancelar", "parar", "pare", "cancelar comando", "pa
 class AssistantService(VoiceService):
     def __init__(self, on_event=lambda event: None, *, command_client=None, executor=None,
                  speaker=None, speech_input=None, microphone_factory=Microphone,
-                 detector_factory=InterruptDetector, speaker_factory=WindowsSpeech, **kwargs):
+                 detector_factory=InterruptDetector, speaker_factory=create_speech, running=None, **kwargs):
         super().__init__(on_event, **kwargs)
         self.command_client = command_client or CommandClient()
         self.executor = executor
@@ -37,6 +38,8 @@ class AssistantService(VoiceService):
         self.session_id = uuid.uuid4().hex
         self._executed = set()
         self._capture_generation = 0
+        self.running = running or RunningApps()
+        self.close_target = None
 
     def cancel(self):
         with self._lock:
@@ -104,8 +107,8 @@ class AssistantService(VoiceService):
         if self.action_error or (self.microphone and self.microphone.safety_error):
             self._publish(State.ERROR, f"{text}\n{self.action_error or self.microphone.safety_error}", interaction_id=interaction_id)
             return
-        context = CommandContext(available_apps=list(self.executor.apps))
-        request = InterpretRequest(interaction_id=f"{self.session_id}:{interaction_id}", text=text, context=context)
+        context = self._context(text)
+        request = InterpretRequest(protocol_version=2, interaction_id=f"{self.session_id}:{interaction_id}", text=text, context=context)
         for attempt in range(2):
             check_cancelled(self._cancelled)
             self._publish(State.INTERPRETING, interaction_id=interaction_id)
@@ -125,17 +128,18 @@ class AssistantService(VoiceService):
             answer = self._listen(interaction_id, confirmation_mode=True)
             if not answer or normalize(answer) in NO:
                 raise Cancelled()
-            request = InterpretRequest(interaction_id=request.interaction_id, text=answer,
-                context=CommandContext(available_apps=list(self.executor.apps), original_text=text,
-                                       clarification_question=decision.message))
+            context = self._context(text + " " + answer).model_copy(update={
+                "original_text": text, "clarification_question": decision.message})
+            request = InterpretRequest(protocol_version=2, interaction_id=request.interaction_id, text=answer, context=context)
         if decision.status == "unsupported":
             self._say(decision.message, interaction_id)
             self._publish(State.RESULT, decision.message, interaction_id=interaction_id)
             return
         action = decision.action
+        self.close_target = self.running.prepare(action.target_id) if isinstance(action, CloseApp) else None
         for attempt in range(2):
             self.speech_input.prepare(self._cancelled)
-            prompt = confirmation(action)
+            prompt = confirmation(action, request.context)
             if attempt:
                 prompt = "Não reconheci sua confirmação. " + prompt
             self._say(prompt, interaction_id)
@@ -157,11 +161,51 @@ class AssistantService(VoiceService):
                 raise RuntimeError("Ações indisponíveis sem confirmação falada e detector de interrupção.")
             validate_proposal(Decision(status="action", action=action), request)
             self._executed.add(request.interaction_id)
-            # Uma interação por vez: só é necessário lembrar o último despacho.
             self._executed.intersection_update({request.interaction_id})
-            self._publish(State.EXECUTING, interaction_id=interaction_id)
-            result = self.executor.execute(action)
+        # Nunca manter o lock da interface durante esperas por processos/diálogos.
+        self._publish(State.EXECUTING, interaction_id=interaction_id)
+        if isinstance(action, CloseApp):
+            result = self._close_application(action, interaction_id)
+        else:
+            result = self._native_dispatch(lambda: self.executor.execute(action, request.context))
         self._publish(State.RESULT, result, interaction_id=interaction_id)
+
+    def _context(self, text):
+        running = self.running.inventory(self.executor.catalog.snapshot())
+        context = self.executor.context(text, [app.public() for app in running])
+        if self.running.error:
+            context = context.model_copy(update={"capabilities": [c for c in context.capabilities if c != "close_app"]})
+            if not context.available_apps:
+                raise RuntimeError(self.running.error)
+        return context
+
+    def _native_dispatch(self, operation):
+        with self._lock:
+            check_cancelled(self._cancelled)
+            if self.action_error or (self.microphone and self.microphone.safety_error):
+                raise RuntimeError("Controle de voz indisponível. Ação cancelada.")
+            return operation()
+
+    def _close_application(self, action, interaction_id):
+        target = self.close_target
+        if self.running.close_normal(target, self._cancelled, self._native_dispatch):
+            return f"Fechamento de {target.name} confirmado pelo sistema."
+        if not target.can_force:
+            return "O aplicativo permanece aberto. Encerramento forçado indisponível para componentes compartilhados com o sistema."
+        # Atualizar depois do WM_CLOSE: um diálogo de salvar pode ter aparecido.
+        current = self.running.remaining(target)
+        if current is None:
+            return f"Fechamento de {target.name} confirmado pelo sistema."
+        self.speech_input.prepare(self._cancelled)
+        self._say(f"{current.name} permanece aberto. Pode haver um documento não salvo ou falta de resposta. "
+                  "Forçar o encerramento pode perder seu trabalho. Para autorizar, diga forçar fechamento.", interaction_id)
+        answer = normalize(self._listen(interaction_id, confirmation_mode=True))
+        check_cancelled(self._cancelled)
+        if answer != "forcar fechamento":
+            return "Encerramento forçado não autorizado. O aplicativo foi preservado."
+        self._publish(State.EXECUTING, "Encerrando o aplicativo confirmado…", interaction_id=interaction_id)
+        closed = self.running.force(current, self._cancelled, self._native_dispatch)
+        return f"{current.name} foi encerrado." if closed else "O sistema recebeu o pedido, mas o aplicativo permanece em execução."
 
     def run(self):
         model = None
@@ -171,6 +215,7 @@ class AssistantService(VoiceService):
             model = self.model_factory(self.stop_requested.is_set)
             vad = create_vad(self.stop_requested.is_set)
             self.executor = self.executor or NativeExecutor()
+            self.executor.start()
             detector = None
             try:
                 detector = self.detector_factory(self.stop_requested.is_set)
@@ -239,4 +284,6 @@ class AssistantService(VoiceService):
                 self.microphone.close()
             if self.speaker:
                 self.speaker.close()
+            if self.executor:
+                self.executor.close()
             self._publish(State.STOPPED)

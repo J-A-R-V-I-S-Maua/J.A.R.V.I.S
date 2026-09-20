@@ -216,7 +216,7 @@ class VoiceService:
 
 def create_service(on_event=lambda event: None):
     import sys
-    if sys.platform == "win32" and os.getenv("COMMANDS_ENABLED", "1") != "0":
+    if sys.platform in {"win32", "linux", "darwin"} and os.getenv("COMMANDS_ENABLED", "1") != "0":
         from host_agent.service import AssistantService
         return AssistantService(on_event)
     mode = os.getenv("TRANSCRIPTION_MODE", "stream").lower()
