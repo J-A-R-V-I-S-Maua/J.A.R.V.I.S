@@ -9,16 +9,48 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from contracts.commands import (CommandContext, Decision, InterpretRequest,
-                               OpenApp, OpenUrl, SearchWeb, validate_proposal)
+                               OpenApp, OpenUrl, SearchWeb, AppDescriptor, validate_proposal)
 from host_agent.client import CommandClient, CommandError
-from host_agent.executor import WindowsExecutor
+from host_agent.executor import NativeExecutor
+from host_agent.catalog import Catalog, Inventory, Entry
 from host_agent.service import AssistantService
 from wakeword.events import Cancelled, State
 
 
+
+NAMES = {"browser": "navegador", "notepad": "Bloco de Notas", "explorer": "Explorador de Arquivos",
+         "chrome": "Google Chrome", "edge": "Microsoft Edge"}
+
+
+def descriptor(identifier):
+    return AppDescriptor(id=identifier, name=NAMES.get(identifier, identifier),
+                         aliases=[identifier], browser=identifier not in {"notepad", "explorer"})
+
+
+def context(ids):
+    return CommandContext(available_apps=[descriptor(i) for i in ids],
+                          default_browser="browser" if "browser" in ids else None)
+
+
+def fake_executor(apps, launches):
+    entries = {i: Entry(i, NAMES.get(i, i), "exe", path, path, aliases=(i,),
+                      browser=i not in {"notepad", "explorer"}, default=i == "browser") for i, path in apps.items()}
+    catalog = Catalog(scanner=lambda: Inventory(entries.copy()))
+    catalog.refresh()
+    executor = NativeExecutor(catalog, launcher=lambda entry, url: launches.append([entry.target, *([url] if url else [])]))
+    executor.entries = entries
+    return executor
+
+
+class EmptyRunning:
+    error = ""
+    def inventory(self, entries):
+        return []
+
+
 def request(text="abra o bloco de notas", apps=None):
-    return InterpretRequest(interaction_id="test:1", text=text,
-        context=CommandContext(available_apps=apps or ["browser", "edge", "chrome", "explorer", "notepad"]))
+    return InterpretRequest(protocol_version=2, interaction_id="test:1", text=text,
+        context=context(apps or ["browser", "edge", "chrome", "explorer", "notepad"]))
 
 
 @pytest.mark.parametrize("url", ["file:///C:/x", "javascript:alert(1)", "https://user:pass@example.com",
@@ -46,10 +78,10 @@ def test_explicit_destinations(text, url):
 
 def test_executor_uses_fixed_argv_and_encodes_query():
     launches = []
-    executor = WindowsExecutor(apps={"browser": "C:/edge.exe", "notepad": "C:/notepad.exe"}, launch=launches.append)
-    executor.execute(SearchWeb(kind="search_web", query='a & b --flag "x"', provider="youtube"))
+    executor = fake_executor({"browser": "C:/edge.exe", "notepad": "C:/notepad.exe"}, launches)
+    executor.execute(SearchWeb(kind="search_web", query='a & b --flag "x"', provider="youtube"), context(["browser", "notepad"]))
     assert launches == [["C:/edge.exe", "https://www.youtube.com/results?search_query=a+%26+b+--flag+%22x%22"]]
-    executor.execute(OpenApp(kind="open_app", app="notepad"))
+    executor.execute(OpenApp(kind="open_app", app="notepad"), context(["browser", "notepad"]))
     assert launches[1] == ["C:/notepad.exe"]
 
 
@@ -101,7 +133,7 @@ def service(answers=("sim",), decisions=None):
     speaker = FakeSpeaker()
     client = FakeClient(decisions or [Decision(status="action", action=OpenApp(kind="open_app", app="notepad"))])
     result = AssistantService(command_client=client, speaker=speaker, speech_input=FakeSpeech(answers),
-        executor=WindowsExecutor(apps={"notepad": "C:/notepad.exe", "browser": "C:/edge.exe"}, launch=launched.append))
+        executor=fake_executor({"notepad": "C:/notepad.exe", "browser": "C:/edge.exe"}, launched), running=EmptyRunning())
     result._interaction_id = 1
     # A espera acústica real é testada na integração; evitar retardar casos de lógica.
     def say(text, interaction_id):
@@ -191,7 +223,7 @@ def test_http_client_rejects_late_interaction(monkeypatch):
     import host_agent.client as module
     actual = httpx.AsyncClient
     transport = httpx.MockTransport(lambda _: httpx.Response(200, json={
-        "interaction_id": "old", "status": "action", "action": {"kind": "open_app", "app": "notepad"}, "message": ""}))
+        "protocol_version": 2, "interaction_id": "old", "status": "action", "action": {"kind": "open_app", "app": "notepad"}, "message": ""}))
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kwargs: actual(transport=transport, **kwargs))
     with pytest.raises(CommandError):
         CommandClient().interpret(request(), lambda: False)
@@ -228,8 +260,8 @@ def test_api_structured_output_and_invalid_json(monkeypatch):
     app = FastAPI()
     app.include_router(module.router)
     with TestClient(app) as client:
-        assert client.post("/commands/interpret", json=request().model_dump()).json()["action"]["app"] == "notepad"
-        assert client.post("/commands/interpret", json=request().model_dump()).status_code == 502
+        assert client.post("/commands/interpret", json=request("Gostaria que o Bloco de Notas fosse iniciado").model_dump()).json()["action"]["app"] == "notepad"
+        assert client.post("/commands/interpret", json=request("Gostaria que o Bloco de Notas fosse iniciado").model_dump()).status_code == 502
 
 
 def test_command_factory_opt_out(monkeypatch):
@@ -284,7 +316,7 @@ def test_api_unavailable_model_does_not_disable_routes(monkeypatch):
     app.include_router(module.router)
     with TestClient(app) as client:
         assert client.get("/commands/health").json()["ready"] is False
-        assert client.post("/commands/interpret", json=request().model_dump()).status_code == 503
+        assert client.post("/commands/interpret", json=request("Gostaria que o Bloco de Notas fosse iniciado").model_dump()).status_code == 503
 
 
 @pytest.mark.parametrize("text,status", [("Abra o Chrome e abra o Explorer", "unsupported"),
@@ -308,8 +340,8 @@ def test_browser_plus_search_remains_one_action():
 def test_clarification_context_separates_original_request_from_answer():
     from api.commands import model_messages
     from contracts.commands import request_problem
-    req = InterpretRequest(interaction_id="clarification", text="receitas de pão",
-        context=CommandContext(available_apps=["browser"], original_text="Pesquise no YouTube",
+    req = InterpretRequest(protocol_version=2, interaction_id="clarification", text="receitas de pão",
+        context=CommandContext(available_apps=[descriptor("browser")], default_browser="browser", original_text="Pesquise no YouTube",
                                clarification_question="O que deseja pesquisar?"))
     messages = model_messages(req, ["https://www.youtube.com"])
     assert request_problem(req) is None

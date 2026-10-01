@@ -32,9 +32,12 @@ class CommandClient:
                     if response.is_error:
                         try:
                             detail = response.json().get("detail")
-                        except ValueError:
+                        except (ValueError, AttributeError):
                             detail = None
                         raise CommandError(detail if isinstance(detail, str) else "IA local indisponível. Tente novamente.")
+                    payload = response.json()
+                    if not isinstance(payload, dict) or payload.get("protocol_version") != 2:
+                        raise CommandError("Contrato incompatível. Atualize a API e o host para a versão 2.")
                     result = InterpretResponse.model_validate_json(response.content)
                     if result.interaction_id != request.interaction_id:
                         raise ValueError("Resposta de outra interação")

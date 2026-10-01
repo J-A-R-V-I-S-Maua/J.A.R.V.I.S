@@ -4,9 +4,9 @@ J.A.R.V.I.S. (Janela de Apoio e Reconhecimento Virtual de Inclusão Social) é u
 
 ## Speakbar integrada ao reconhecimento de voz
 
-No Windows, o assistente agora interpreta pedidos com **IA local**, confirma por voz
-e abre aplicativos, sites e pesquisas. Diga “parar” ou “cancelar” como uma frase isolada
-para interromper. O botão também cancela; uma abertura já entregue ao Windows não é desfeita.
+O assistente interpreta pedidos com **IA local** e solicita confirmação falada.
+Diga “parar” ou “cancelar” como uma frase isolada para interromper. O botão também
+cancela. Solicitações de abertura ou fechamento já entregues ao sistema não são desfeitas.
 
 ### Preparar IA local no Windows
 
@@ -41,6 +41,8 @@ Exemplos depois de “hey jarvis”:
 - “Abra o Brave” ou “pesquise receitas no Google usando o Firefox”, se instalados.
 - “Abra o YouTube” ou “acesse example.com”.
 - “Pesquise acessibilidade no Google” ou “pesquise receitas de pão no YouTube”.
+- “Abra o meu editor”, usando o nome de um aplicativo encontrado nos atalhos ou menus.
+- “Feche o Word” ou “feche o navegador”, inclusive se foram abertos manualmente.
 
 O assistente fala a proposta e escuta a resposta sem outra wake word. Depois da pergunta,
 responda “sim”, “confirmo” ou “pode executar”; “não” cancela. Há até 30 segundos para
@@ -48,48 +50,70 @@ responder e uma repetição se inconclusiva. Somente transcrições finais autor
 Durante a pergunta, confirmações são descartadas para evitar autorização pela própria
 voz sintetizada; o monitor de interrupção permanece ativo.
 
-“Solicitação enviada ao Windows” confirma o despacho, não o carregamento da página.
-Digitação, cliques, rolagem, fechamento e sequências gerais ainda não estão disponíveis.
+“Solicitação enviada ao sistema” confirma o despacho, não o carregamento da página.
+Digitação, cliques, rolagem e sequências gerais ainda não estão disponíveis.
 
-### Descoberta de navegadores por sistema
+### Descoberta automática e fechamento
 
-O catálogo inclui Chrome, Edge, Brave, Firefox, Chromium, Opera e Vivaldi nos três
-sistemas, além de Safari no macOS. Só anuncia navegadores que consegue localizar;
-não instala aplicativos. Reinicie o host após instalar ou remover um navegador.
+O catálogo não depende de uma lista de marcas. Consulta somente as fontes abaixo,
+prioriza o desktop e atualiza em segundo plano a cada 60 segundos. Uma busca sem
+correspondência provoca atualização adicional. Não varre o disco nem instala aplicativos.
 
-| Sistema | Descoberta e seleção |
-| --- | --- |
-| Windows | Registro App Paths do usuário/máquina, visões 32/64 bits e diretórios usuais de instalação. Consulta a associação HTTPS para identificar o padrão. |
-| Linux | Executáveis no PATH, wrappers em `/snap/bin` e IDs Flatpak conhecidos instalados. Consulta `xdg-settings`, com alternativa `xdg-mime`. |
-| macOS | Consulta NSWorkspace/Launch Services e valida o identificador do bundle. Como alternativa, verifica `~/Applications`, `/Applications` e `/System/Applications`. Abre o bundle com `/usr/bin/open -a`. |
+| Sistema | Descoberta | Fechamento normal | Voz |
+| --- | --- | --- | --- |
+| Windows | Desktop real/público e menus Iniciar pelas pastas conhecidas da Shell; `.lnk` e AppsFolder. Respeita redirecionamento para OneDrive. | `WM_CLOSE` nas janelas identificadas da sessão. | SAPI PT-BR + Vosk 0.3.45. |
+| macOS | Bundles em `/Applications`, `~/Applications`, `/System/Applications`; aliases e links no desktop. | `NSRunningApplication.terminate()`. | `say` com voz PT-BR + Vosk 0.3.42. |
+| Linux X11 | Desktop XDG e menus via GIO/DesktopAppInfo, incluindo exportações Snap/Flatpak. | `_NET_CLOSE_WINDOW`. | eSpeak NG PT-BR + Vosk 0.3.45. |
+| GNOME/Wayland | Mesmo catálogo GIO. | Extensão JARVIS descrita na instalação Linux. | Mesmo TTS e detector do Linux. |
+| KDE/Wayland | Abertura via GIO disponível. | Ainda indisponível. | Mesmo TTS e detector do Linux. |
 
-Quando nenhum navegador é especificado, o padrão do sistema tem prioridade se
-reconhecido e encontrado no catálogo. Caso contrário, a ordem de alternativa é:
+Atalhos equivalentes são reunidos; parâmetros diferentes geram variantes. Nomes
+ambíguos exigem esclarecimento. Documentos, pastas, sites, scripts avulsos e entradas
+inválidas são excluídos. No Linux, lançadores de desktop precisam estar autorizados
+pelo usuário; entradas ocultas ou dependentes de terminal ficam fora deste catálogo.
+Aplicativos portáteis precisam de um atalho/lançador nas fontes consultadas.
 
-- Windows: Edge, Chrome, Brave, Firefox, Chromium, Opera, Vivaldi.
-- Linux: Firefox, Chrome, Chromium, Brave, Edge, Opera, Vivaldi.
-- macOS: Safari, Chrome, Firefox, Brave, Edge, Chromium, Opera, Vivaldi.
+Navegadores são identificados pelas associações registradas. A escolha explícita tem
+prioridade, seguida do padrão encontrado e de um navegador disponível no catálogo.
+Não há mais ordem fixa por marcas. “Feche o navegador” pergunta qual quando há vários
+em execução. A IA recebe no máximo 20 candidatos, com nomes, aliases e IDs; caminhos,
+argumentos e PIDs permanecem no host. Alterar o lançador depois da proposta invalida
+a execução e exige um novo pedido.
 
-Pedidos explícitos como “usando o Firefox” restringem a escolha enviada à IA e são
-validados novamente no host. Um navegador ausente não é substituído silenciosamente.
-Instalações portáteis fora dos locais consultados, canais beta e navegadores fora
-do catálogo não têm descoberta garantida. No Linux, IDs desktop desconhecidos não
-são executados; comandos `Exec` desses arquivos não são interpretados pelo projeto.
+O fechamento abrange o aplicativo inteiro e suas janelas, inclusive aplicativos
+abertos manualmente. Após a confirmação comum, o assistente solicita fechamento normal
+e observa por até 15 segundos. Se permanecer aberto, avisa sobre documento não salvo
+ou falta de resposta. Uma segunda captura, de até 30 segundos, aceita somente
+**“forçar fechamento”** para encerrar os processos confirmados, com risco de perda de
+trabalho. “Sim”, silêncio ou cancelamento não autorizam essa etapa. O JARVIS não
+clica em Salvar/Descartar. Mudanças nas janelas ou identidade exigem novo pedido.
 
-Para consultar o catálogo local sem abrir navegadores, microfone ou Docker, com a
-venv ativada, execute `python -m host_agent.catalog`.
+Não fecha serviços, processos de outro usuário, o próprio JARVIS ou componentes do
+desktop. Explorer e gerenciadores de arquivos Linux não podem ser encerrados à força.
+O Finder não é anunciado para fechamento: sua integração atual opera sobre o processo
+compartilhado do desktop, sem fechamento seguro de janelas individuais. Hosts UWP
+compartilhados sem identidade verificável também ficam fora do inventário Windows.
+Sem adaptador de fechamento, as aberturas continuam disponíveis.
 
-**Compatibilidade:** catálogo e executor de navegadores possuem implementações para
-Windows, Linux e macOS. O ciclo integrado de ações por voz continua habilitado apenas
-no Windows, pois usa SAPI; Linux/macOS seguem com transcrição até a implementação e
-validação de TTS/interrupção nesses sistemas. Explorer e Bloco de Notas são exclusivos
-do Windows. Os adaptadores Linux/macOS foram testados com ambientes simulados, ainda
-sem aceitação em desktops nativos.
+Diagnóstico local, sem microfone nem Docker: `python -m host_agent.catalog`.
+Mostra fontes, variantes, destinos locais, exclusões com motivos, aplicativos em
+execução e disponibilidade do fechamento. O diagnóstico contém caminhos locais;
+revise-os antes de compartilhar.
 
-Referências das interfaces: [registro de aplicativos no Windows](https://learn.microsoft.com/en-us/windows/win32/shell/app-registration),
-[xdg-utils](https://wiki.freedesktop.org/www/Software/xdg-utils/),
-[Flatpak](https://docs.flatpak.org/en/latest/using-flatpak.html) e
-[NSWorkspace](https://developer.apple.com/documentation/appkit/nsworkspace).
+**Validação:** testes automatizados portáveis e três testes nativos de janelas no
+Windows concluídos. macOS Intel/Apple Silicon, Linux X11, GNOME/Wayland e a matriz
+completa Windows 10/11 ainda exigem aceitação em máquinas nativas. A integração de voz
+está habilitada nos três sistemas quando as dependências estão prontas; isso não
+substitui a validação acústica com microfone e usuário real.
+
+Referências: [GIO AppInfo](https://docs.gtk.org/gio/method.AppInfo.launch.html),
+[WM_CLOSE](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-close),
+[NSRunningApplication](https://developer.apple.com/documentation/appkit/nsrunningapplication)
+e [EWMH/X11](https://specifications.freedesktop.org/wm/latest-single/).
+
+API e host usam o **contrato versão 2**. Atualize ambos; versões incompatíveis geram
+mensagem solicitando atualização. Para atualizar apenas a API e preservar os demais
+containers: `docker compose up --build --no-deps -d api`. Depois reinicie o host.
 
 Para preservar somente a transcrição anterior:
 
@@ -134,7 +158,7 @@ A demonstração `--demo` continua funcionando sem Docker.
 
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
 ou uploads gravados no servidor. As gravações anteriores são preservadas.
-No Windows, ações e confirmação por voz ficam habilitadas por padrão;
+Nos sistemas suportados, ações e confirmação por voz ficam habilitadas por padrão;
 `COMMANDS_ENABLED=0` preserva o reconhecimento isolado.
 A aparência preserva transparência e gradiente, sem desfoque nativo.
 
@@ -166,7 +190,8 @@ O serviço `realtime` atende uma conexão de reconhecimento por vez.
 | `STREAM_MAX_SECONDS` | `30` | Duração máxima da interação, incluindo espera inicial. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
-| `COMMANDS_ENABLED` | `1` no Windows | `0` preserva somente transcrição; outros sistemas não executam ações. |
+| `COMMANDS_ENABLED` | `1` | Ações nos sistemas suportados quando as dependências estão prontas; `0` preserva somente transcrição. |
+| `TTS_VOICE` | primeira voz PT-BR encontrada | Seleção opcional de voz instalada para `say` no macOS. |
 | `OLLAMA_MODEL` | `qwen3:4b-instruct` | Modelo do backend; definir antes de recriar a API e baixar o mesmo modelo. |
 | `INTERRUPT_MODEL_DIR` | cache do usuário | Caminho de um modelo Vosk PT já extraído no host. |
 
@@ -217,11 +242,23 @@ Arquitetura atual: [ResumoArquitetura.md](ResumoArquitetura.md).
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-Os testes automatizados não abrem aplicativos e permanecem no repositório para
-verificar contratos, confirmação, cancelamento e controle de áudio. O roteiro
-temporário de validação sintética foi removido após esta fase; os resultados medidos
-permanecem em [HistoricoEvolucao.md](HistoricoEvolucao.md). A validação com fala humana
-e microfone continua necessária.
+Por padrão, os testes não abrem aplicativos: verificam contratos, catálogo,
+confirmação, cancelamento, fechamento e controle de áudio. Para os três testes nativos
+Windows, que criam e encerram exclusivamente janelas descartáveis da própria suíte:
+
+```powershell
+$env:JARVIS_NATIVE_TESTS = "1"
+.venv\Scripts\python.exe -m pytest -q tests/test_native_windows.py
+Remove-Item Env:JARVIS_NATIVE_TESTS
+```
+
+Os testes permanentes ficam em `tests/`, incluindo a fixture de janela e diálogo de
+documento não salvo. Resultados medidos estão em [HistoricoEvolucao.md](HistoricoEvolucao.md).
+A validação com fala humana e microfone continua necessária. Em cada novo ambiente,
+teste um aplicativo fora do antigo catálogo, fechamento de um aplicativo aberto
+manualmente, documento descartável não salvo, cancelamento durante fala/espera e a
+segunda confirmação para forçar. Registre descoberta, interpretação e interrupção;
+não use documentos de trabalho nesses testes.
 
 ## Reconhecimento de voz e modelos
 
@@ -299,12 +336,18 @@ python -m pip install -r requirements.txt
 Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Permita o acesso
 ao microfone para o terminal ou IDE nas configurações de privacidade do macOS.
 
+Instale uma voz de português do Brasil nas configurações de fala/acessibilidade.
+Confira com `say -v '?'`; opcionalmente defina `TTS_VOICE` com o nome exato da voz.
+O requirements seleciona Cocoa e Vosk 0.3.42 para macOS (Intel/Apple Silicon).
+Prepare Docker/Ollama como na seção inicial e execute `python -m host_agent.interrupt`
+para preparar o detector. Falhas de TTS/interrupção deixam somente a transcrição.
+
 ## Linux
 
 Debian/Ubuntu com Python 3.11 disponível nos repositórios (por exemplo, Debian 12):
 
 ```bash
-sudo apt install python3.11 python3.11-venv python3.11-dev build-essential portaudio19-dev
+sudo apt install python3.11 python3.11-venv python3.11-dev build-essential portaudio19-dev pkg-config libcairo2-dev libgirepository1.0-dev gir1.2-glib-2.0 espeak-ng
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -315,3 +358,24 @@ Em distribuições com outro Python padrão, instale Python 3.11 e seus headers 
 gerenciador da distribuição ou por um gerenciador de versões antes de criar a venv.
 No Fedora, PortAudio usa `portaudio-devel`; no Arch, `portaudio`.
 Use uma sessão desktop com dispositivo de entrada disponível.
+
+PyGObject/GIO realiza a descoberta e o lançamento; python-xlib atende X11.
+Confira a voz com `espeak-ng -v pt-br "Teste de voz"`. Prepare Docker/Ollama como na
+seção inicial e execute `python -m host_agent.interrupt` para preparar o Vosk.
+Para somente transcrição: `COMMANDS_ENABLED=0 python main.py` (também no macOS).
+
+No **GNOME/Wayland**, instale a extensão incluída no projeto:
+
+```bash
+mkdir -p ~/.local/share/gnome-shell/extensions
+cp -R integrations/gnome/jarvis-window-control@jarvis.local ~/.local/share/gnome-shell/extensions/
+# Na primeira instalação, saia da sessão e entre novamente para o GNOME descobri-la.
+gnome-extensions enable jarvis-window-control@jarvis.local
+gnome-extensions info jarvis-window-control@jarvis.local
+```
+
+A extensão declara GNOME Shell 46–50; essa matriz ainda não foi validada nativamente.
+Ela expõe somente consulta e fechamento de janelas via D-Bus, sem comandos de shell
+nem execução de código fornecido pelo host. Sem a extensão ativa, o diagnóstico
+explica a indisponibilidade do fechamento. KDE/Wayland, controle de abas, UI Automation,
+digitação/cliques/rolagem gerais e respostas automáticas a diálogos ficam para depois.

@@ -594,3 +594,97 @@ em desktops nativos desses sistemas nesta etapa. O fluxo completo por voz contin
 habilitado apenas no Windows por depender do SAPI; portar TTS/interrupção e validar
 a integração nos demais sistemas permanece como trabalho futuro. README e resumo
 de arquitetura distinguem essa limitação do catálogo e executor multiplataforma.
+
+## 16. Descoberta automática e fechamento de aplicativos — 20/09/2026
+
+O catálogo fixo foi substituído por descoberta nas fontes registradas do sistema:
+desktop real/público e menus Iniciar redirecionáveis, atalhos Shell e AppsFolder no
+Windows; desktop/menus XDG via GIO no Linux; aliases e bundles no macOS. Não há
+varredura indiscriminada do disco. IDs estáveis, deduplicação, variantes de lançamento,
+aliases, fontes e exclusões com motivos ficam disponíveis no diagnóstico local.
+O catálogo inicia com o host, atualiza a cada 60 segundos e repete a busca sem resultado.
+
+Contratos e endpoint de interpretação migraram juntos para a versão 2. A IA recebe
+até 20 candidatos locais, separados entre abertura e execução atual. Caminhos,
+argumentos e PIDs não são enviados ao modelo; schema e host restringem os IDs aceitos.
+Nomes ambíguos exigem esclarecimento e alterações do lançador invalidam a proposta.
+Pedidos simples inequívocos podem ser resolvidos deterministicamente; Ollama continua
+interpretando linguagem natural e propondo sites/pesquisas. Pedido composto com
+digitação é recusado integralmente antes da inferência nos padrões reconhecidos.
+
+Criados os adaptadores de inventário e fechamento para Windows, macOS, X11 e
+GNOME/Wayland. O alvo pode ter sido aberto manualmente. Identidade inclui aplicação,
+usuário, PID, criação do processo e conjunto de janelas. Nomes de processos isolados
+não autorizam encerramento. Fechamento normal respeita diálogos de salvamento e espera
+até 15 segundos fora do bloqueio da interface. Se permanecer aberto, outra pergunta
+avisa sobre perda de trabalho e exige exatamente “forçar fechamento” em nova captura
+de até 30 segundos. “Sim”, silêncio ou cancelamento não autorizam força. Nenhum diálogo
+Salvar/Descartar é respondido automaticamente. A IA não controla essa autorização.
+
+TTS cancelável usa SAPI, say ou eSpeak NG por plataforma. Vosk usa 0.3.45 no
+Windows/Linux e 0.3.42 no macOS. O coordenador deixa de ser exclusivo do Windows:
+habilita ações nos sistemas suportados quando voz e interrupção estão prontas.
+Falhas desses componentes preservam transcrição; falta do adaptador de fechamento
+preserva abertura. Microfone único, descarte de buffers após TTS, streaming, batch,
+--demo e COMMANDS_ENABLED=0 permanecem disponíveis.
+
+Principais arquivos novos:
+
+- `host_agent/platform_apps.py`: descoberta e abertura pelas interfaces nativas.
+- `host_agent/running.py`: identidade, inventário, revalidação e espera por fechamento.
+- `host_agent/window_backends.py`: adaptadores Windows, macOS, X11 e GNOME.
+- `integrations/gnome/jarvis-window-control@jarvis.local/extension.js` e `metadata.json`:
+  extensão D-Bus limitada a consulta e fechamento de janelas.
+- `tests/test_close_apps.py`, `tests/test_native_windows.py`,
+  `tests/test_portable_speech.py` e `tests/fixtures/native_window.py`: testes permanentes.
+
+Catálogo, executor, coordenador, contratos, cliente/API, TTS, dependências e fábrica do
+serviço foram atualizados. Os testes anteriores de comandos e catálogo foram adaptados
+ao contrato dinâmico. README e resumo de arquitetura documentam preparação dos três
+sistemas, instalação da extensão, diagnóstico, migração de protocolo e limitações.
+Nenhum roteiro temporário de validação foi acrescentado ao repositório nesta retomada;
+a fixture de janela descartável é parte permanente da suíte.
+
+### Resultados efetivamente medidos
+
+- Suíte final: **109 testes aprovados**, incluindo os três testes nativos optativos
+  Windows, em **4,62 s**. Sem a variável JARVIS_NATIVE_TESTS, esses três são ignorados.
+  Permanecem dois avisos de depreciação de Starlette/httpx e AnyIO.
+- Descoberta real no Windows: **177 entradas/variantes e 87 exclusões**. Identificou o
+  desktop em OneDrive e aplicativos fora do antigo catálogo, além de Brave, Chrome e
+  Edge. Brave é o padrão. Duas medições finais: **0,844 s** e **0,750 s**. Houve uma
+  medição de **3,032 s** durante execução simultânea de outros testes; não são garantias
+  de latência. Variantes com argumentos não assumem a associação padrão do navegador.
+- Três testes nativos com janelas descartáveis: abertura por atalho de aplicativo
+  fora do catálogo antigo; fechamento normal de aplicativo aberto pelo teste; diálogo
+  de documento não salvo preservado até autorização explícita de força pelo teste.
+  Aplicativos e documentos reais do usuário não foram fechados. A fixture não grava dados.
+- API Docker reconstruída e /commands/health respondeu protocol_version=2, ready=true,
+  com qwen3:4b-instruct. Testes reais de interpretação não despacharam aplicativos.
+  Pedido exato de Visual Studio Code: **0,016–0,032 s** pelo resolvedor local.
+  Pedido em linguagem natural para iniciá-lo: **2,875 s** em repetição válida.
+  Pesquisa no Google usando Brave: **4,593 s**. Uma resposta inicial do modelo foi
+  inválida e bloqueada com HTTP 502, sem ação, após **13,156 s**.
+- Na retomada, Docker estava desligado e foi iniciado. “Abra o YouTube” gerou open_url
+  válido em **9,281 s** na primeira chamada e **1,812 s** após aquecimento. O pedido
+  “abra o bloco de notas e escreva olá” inicialmente gerou resposta inválida bloqueada;
+  após acrescentar a recusa determinística, retornou unsupported sem ação em menos
+  de **0,001 s**. A validação não afirma que uma página terminou de carregar.
+
+### Limitações e aceitação pendente
+
+Windows foi validado no computador disponível; a matriz completa Windows 10/11 ainda
+precisa de aceitação. macOS Intel/Apple Silicon, Linux X11 e GNOME/Wayland têm testes
+simulados e código de integração, mas não foram testados em desktops nativos nesta
+fase. A extensão declara GNOME 46–50; isso não equivale a compatibilidade comprovada.
+Medições nativas de confirmação e interrupção acústica nesta versão estão pendentes
+nos três sistemas. Resultados de áudio da seção 13 pertencem à versão anterior.
+
+Finder não fica disponível para fechamento sem integração verificável de suas janelas;
+seu processo compartilha o desktop. Gerenciadores de arquivos não admitem força.
+Hosts UWP compartilhados sem identidade verificável, serviços, outros usuários,
+JARVIS e componentes protegidos da sessão são excluídos. Lançadores Linux ocultos,
+dependentes de terminal ou não autorizados no desktop ficam fora do catálogo.
+
+Continuam adiados: KDE/Wayland para fechamento, abas individuais, digitação, cliques,
+rolagem, UI Automation, sequências gerais e respostas automáticas a salvamento.

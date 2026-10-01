@@ -1,112 +1,160 @@
 # Agente de Voz para Acessibilidade Motora
 
-Arquitetura do J.A.R.V.I.S., atualizada em 19 de setembro de 2026.
+Arquitetura do J.A.R.V.I.S., atualizada em 20 de setembro de 2026.
 
-## Objetivo e primeira entrega
+## Objetivo e fluxo
 
-Permitir que pessoas com dificuldade motora parcial ou total controlem o computador
-por linguagem natural em PT-BR. A entrega abre navegadores do catálogo instalado,
-Explorer e Bloco de Notas, acessa endereços e pesquisa no Google/YouTube.
+Permitir controle do computador em PT-BR por voz. A implementação descobre aplicativos
+registrados, abre aplicativos/sites/pesquisas e fecha aplicativos gráficos identificados,
+incluindo os abertos manualmente. Windows, macOS e Linux têm adaptadores; a validação
+nativa desta fase foi feita no Windows. A aceitação dos demais ambientes está pendente.
 
-O ciclo é: ativação → transcrição final → interpretação local → confirmação falada →
-resposta final explícita → despacho ao Windows. Parciais servem somente ao feedback.
+Ativação → transcrição final → interpretação local → confirmação falada → resposta final
+explícita → execução nativa. Parciais servem somente ao feedback. O host autoriza ações;
+a IA não recebe acesso ao desktop, executáveis, comandos, processos ou shell.
 
 ## Divisão entre host e Docker
 
 | Componente | Local | Responsabilidade |
 | --- | --- | --- |
-| wakeword | Host | Wake word ONNX, VAD, transporte STT e modo somente transcrição. |
-| host_agent | Host Windows | Sessão, áudio contínuo, interrupção, confirmação, SAPI e executor. |
-| host_agent.catalog / executor | Host Windows, Linux ou macOS | Descoberta local e despacho nativo de navegadores; integração por voz ainda restrita ao Windows. |
-| speakbar | Host | Apresentação Qt; captura, rede e TTS fora da thread gráfica. |
-| contracts | Host e API | Tipos Pydantic e validação comum das ações. |
-| api | Docker | Entrada HTTP/WebSocket, proxy STT e interpretação de comandos. |
-| realtime | Docker | Whisper base, CPU INT8, uma conexão por vez. |
-| ollama | Docker | Qwen3 4B Instruct Q4_K_M, contexto 4096, processamento local. |
+| wakeword | Host | ONNX, VAD, transporte STT e modo somente transcrição. |
+| host_agent.service | Host | Coordenador independente de Qt, sessão em memória, confirmação e cancelamento. |
+| host_agent.speech / interrupt / tts | Host | Microfone único, Whisper, interrupção Vosk e fala cancelável. |
+| host_agent.catalog / platform_apps | Host | Descoberta, atualização, seleção de candidatos e abertura nativa. |
+| host_agent.running / window_backends | Host | Inventário gráfico, identidade, fechamento normal e forçado. |
+| integrations/gnome | GNOME Shell | Extensão limitada a consulta e fechamento de janelas via D-Bus. |
+| speakbar | Host | Apresentação Qt de escuta, interpretação, fala, confirmação e execução. |
+| contracts | Host e API | Modelos Pydantic v2 e validação compartilhada das propostas. |
+| api | Docker | HTTP/WebSocket, proxy STT e interpretação direta, fora do Celery. |
+| realtime | Docker | Whisper base, CPU INT8, quatro threads, uma conexão por vez. |
+| ollama | Docker | Qwen3 4B Instruct Q4_K_M, contexto 4096, temperatura zero. |
 | Redis, worker e beat | Docker | Transcrição batch e retenção de uploads preservadas. |
 
-Ollama deixa de ser uma fase futura. A confirmação sonora e a sessão passam ao host,
-junto do executor e da interrupção. A API não tem acesso ao desktop. Não há fallback
-para nuvem. O STT, originalmente planejado no host, já roda no Docker desde o streaming.
+O microfone distribui PCM16 mono a 16 kHz em blocos de 80 ms para wake word/VAD,
+transporte Whisper e Vosk. Captura, rede, interpretação e TTS ficam fora da thread Qt.
+Ollama tem volume persistente, configurações CPU/NVIDIA e limite de interpretação
+de 30 segundos. Não há dependência do Ollama para transcrever nem fallback para nuvem.
 
-```text
-Microfone no Windows ──┬── Wake word/VAD → API → Whisper
-                      └── Vosk → interrupção do coordenador
-Texto final → coordenador → API → Ollama → proposta validada
-Proposta → pergunta SAPI → confirmação pelo Whisper → executor Windows
-                       ↘ estados e texto na speakbar
-```
+## Catálogo dinâmico e contexto
 
-## Contratos e autorização
+Fontes delimitadas, sem varredura indiscriminada:
 
-- POST /commands/interpret recebe interaction_id, text e context: idioma, aplicativos,
-  capacidades e eventual esclarecimento pendente.
-- Resposta: interaction_id, status (action, clarification ou unsupported), action
-  tipada ou nula e message em PT-BR. A API converte a saída estruturada plana do modelo
-  para a união de ações compartilhada com o host.
-- Esclarecimentos são apresentados ao modelo como diálogo: pedido original, pergunta
-  do assistente e resposta, mantendo o destino e o navegador do pedido.
-- Ações: open_app(app), open_url(url, browser), search_web(query, provider, browser).
-  Não existe operação de shell ou código livre.
-- GET /commands/health informa disponibilidade do Ollama e presença do modelo,
-  sem bloquear a transcrição.
-- O host valida novamente a proposta, constrói a pergunta usando seus parâmetros e
-  só executa após “sim”, “confirmo” ou “pode executar” como resposta final.
-- Google e YouTube são aliases conhecidos. Outros destinos exigem domínio/URL
-  fornecido; somente HTTP/HTTPS sem credenciais. Consultas são codificadas na URL.
-- Catálogo: Chrome, Edge, Brave, Firefox, Chromium, Opera e Vivaldi; Safari no macOS.
-  O padrão do sistema tem prioridade quando reconhecido e instalado; as ordens de
-  alternativa por SO constam no README. Escolhas explícitas restringem o schema da
-  IA e são revalidadas no host. Navegador solicitado ausente impede a execução.
-  Caminhos, IDs Flatpak e argumentos vêm exclusivamente do catálogo local.
-- Descoberta separada por SO em `host_agent/catalog.py`: registro e diretórios no
-  Windows; PATH, Snap, Flatpak e XDG no Linux; NSWorkspace e bundles no macOS.
-  `NativeExecutor` recebe argumentos fixos do catálogo e acrescenta apenas a URL
-  validada. `WindowsExecutor` permanece como interface de compatibilidade.
-- Uma ação lógica por interação. Pedidos com escrita, cliques ou múltiplas ações
-  independentes devem ser recusados por inteiro.
+- Windows: pastas conhecidas da Shell para desktop real/público e menus Iniciar,
+  resolução de atalhos .lnk, AppsFolder e associações HTTPS registradas.
+- Linux: desktop XDG e menus via GIO/DesktopAppInfo, respeitando exportações Snap/Flatpak.
+  Abertura delegada ao GIO, sem reconstruir Exec, códigos de campo ou ativação D-Bus.
+- macOS: aliases/links do desktop e bundles em /Applications, ~/Applications e
+  /System/Applications; validação de bundle, plist e executável interno.
 
-## Sessão, áudio e falhas
+O catálogo registra ID estável, nomes, aliases, fontes, identidade nativa, lançador e
+impressões dos arquivos. Os dados privados de lançamento ficam somente no host.
+Documentos, pastas, sites, scripts avulsos, entradas inválidas e aplicativos auxiliares
+não são tratados como aplicativos gráficos. Exclusões têm motivo no diagnóstico.
+Entradas Linux ocultas ou que exigem terminal são excluídas; lançadores do desktop
+precisam estar autorizados pelo usuário.
 
-O coordenador mantém uma interação por vez, com identificadores separados para
-interação e captura. Uma thread possui o microfone e distribui PCM16 mono de 16 kHz
-em blocos de 80 ms. Filas são limitadas; perder áudio durante captura gera erro.
+Deduplicação usa identidade e configuração de lançamento; parâmetros diferentes
+preservam variantes. Desktop tem preferência secundária ao nome/aliases. Nomes
+ambíguos pedem esclarecimento. Inicialização e atualização periódica a cada 60 segundos;
+busca sem correspondência atualiza antes de declarar ausência. Sem histórico de uso.
 
-Vosk reconhece interrupções: “parar”, “pare”, “cancelar”, “parar agora” e “cancelar
-comando”. A forma reconhecida “para” também é aceita. O resultado precisa ser uma
-frase final isolada: consultas como “pesquise como parar de fumar” não devem cancelar.
-Vosk não substitui o Whisper para pedidos e confirmações nem autoriza ações.
+Seleção local limita o contexto a 20 candidatos, separando disponíveis para abertura
+e aplicativos em execução para fechamento. O modelo recebe IDs, nomes e aliases,
+tratados como dados não confiáveis. Não recebe PIDs, caminhos ou argumentos.
+O navegador explícito tem prioridade, seguido da associação padrão descoberta e de
+outro navegador disponível. Nomes de marcas são aliases, não uma lista de instalações.
 
-A próxima captura é preparada antes da pergunta. Durante o TTS não são aceitos novos
-pedidos nem confirmações; os buffers são descartados após a fala e uma curta cauda
-acústica. O detector de interrupção continua ativo durante processamento e TTS.
+## Contrato versão 2
 
-A confirmação tem limite de 30 segundos, incluindo transcrição, com uma repetição
-se inconclusiva. Informações faltantes permitem um esclarecimento por voz. Sessão e
-autorização ficam em memória e não são recuperadas depois de reiniciar o aplicativo.
+POST /commands/interpret exige protocol_version=2, interaction_id, text e context.
+A resposta inclui a mesma versão/identificador e status action, clarification ou
+unsupported, com ação tipada ou mensagem. Incompatibilidade retorna HTTP 409 e pede
+atualização conjunta de API e host; dados inválidos retornam 422.
 
-Cancelamento interrompe TTS, invalida respostas pendentes e impede o próximo despacho.
-Uma abertura já entregue ao Windows não é desfeita. Reconhecimento tem latência e
-depende da qualidade acústica; não há garantia de tempo real rígido.
+Ações: open_app(app), open_url(url, browser), search_web(query, provider, browser) e
+close_app(target_id). Os campos app/browser/target_id referem-se aos IDs candidatos.
+Não existe ação pública para forçar encerramento nem campo para comandos livres.
 
-Falhas no TTS ou no detector impedem ações e preservam transcrição. Falhas no Ollama
-permitem novo pedido por wake word ou botão. Falha no microfone exige recuperar o
-dispositivo e tentar novamente. X/Alt+F4 encerra o host e libera seus recursos;
-containers permanecem serviços independentes.
+Pedidos simples com correspondência inequívoca podem ser resolvidos deterministicamente.
+Demais pedidos usam saída estruturada Ollama com schema limitado aos IDs candidatos.
+API e host validam novamente. Resposta inválida, timeout ou falha não autorizam ação.
+Metadados do catálogo não são instruções. O host constrói a confirmação a partir da
+ação validada e revalida lançador/identidade imediatamente antes do despacho.
 
-## Compatibilidade e evolução
+GET /commands/health informa versão, disponibilidade do interpretador e modelo.
+Esclarecimento preserva pedido original, pergunta e resposta em um diálogo limitado.
+Google/YouTube são aliases de sites; demais URLs devem ser fornecidas pelo usuário,
+somente HTTP/HTTPS sem credenciais. Consultas são codificadas na URL.
+Uma ação lógica por interação; operações fora do escopo não devem ser executadas parcialmente.
 
-COMMANDS_ENABLED=0 mantém somente transcrição. --demo funciona sem microfone, modelos
-ou Docker. Streaming continua padrão; batch mantém WAV, uploads e Celery. Ações são
-habilitadas por voz no Windows 10/11; outros sistemas mantêm o reconhecimento.
-O catálogo e o executor de navegadores já têm adaptadores Linux/macOS, testados com
-ambientes simulados. TTS e aceitação nativa nesses sistemas permanecem pendentes.
+## Identidade e fechamento
 
-Permanecem para depois: digitação, cliques, rolagem, fechamento de janelas, UI Automation,
-visão computacional, sequências gerais, macros, memória persistente, outros idiomas,
-Claude/nuvem e empacotamento. O MVP mais amplo continua como direção futura.
+O inventário enumera aplicativos gráficos da sessão do usuário sem depender de quem
+os abriu. Agrupa janelas por identidade nativa, associa processos a usuário, PID e
+horário de criação e exclui JARVIS, serviços e componentes protegidos da sessão.
+Intérpretes compartilhados não são agrupados somente pelo nome do executável.
+Processos filhos só são incluídos quando a identidade pode ser comprovada.
 
-Testes automatizados de regressão acompanham o código. O roteiro temporário de
-validação com áudio sintético foi removido após a conclusão desta fase.
-A aceitação com fala real de usuários com dificuldade motora continua necessária.
-Os resultados efetivamente medidos constam no histórico de evolução.
+| Sistema | Solicitação normal | Forçado |
+| --- | --- | --- |
+| Windows | WM_CLOSE nas janelas confirmadas. | psutil com PID, criação, usuário e executável revalidados. |
+| macOS | NSRunningApplication.terminate(). | forceTerminate() com identidade e data de lançamento verificadas. |
+| Linux X11 | _NET_CLOSE_WINDOW para janelas locais verificadas. | Processos locais confirmados e revalidados. |
+| GNOME/Wayland | Extensão JARVIS lista janelas e solicita window.delete(). | Processos confirmados e revalidados pelo host. |
+
+Primeira confirmação informa que todas as janelas serão abrangidas. Antes do despacho,
+mudanças no conjunto ou identidade exigem um novo pedido. Após fechamento normal,
+observa por até 15 segundos fora do bloqueio da interface. Se continuar aberto, preserva
+o conjunto de processos e atualiza as janelas para incluir eventual diálogo de salvar.
+
+A segunda pergunta avisa sobre perda de trabalho e abre nova captura de até 30 segundos.
+Somente a frase final “forçar fechamento” autoriza força. “Sim”, silêncio, resposta
+inconclusiva ou cancelamento preservam o aplicativo. Nenhum botão Salvar/Descartar é
+acionado. Antes de forçar, revalida novamente o conjunto e cada processo; verifica o
+resultado após o despacho. Fechar a janela e permanecer na bandeja pode levar à
+segunda pergunta, pois o pedido abrange o aplicativo inteiro.
+
+Gerenciadores de arquivos não podem ser encerrados à força. O Finder fica indisponível
+para fechamento até existir integração segura de suas janelas; terminate() afetaria o
+desktop compartilhado. Hosts UWP compartilhados sem identidade verificável são excluídos.
+Sem extensão GNOME ou adaptador verificável, desabilita fechamento e preserva abertura.
+KDE/Wayland não tem adaptador de fechamento. Não existe fallback por teclas globais.
+
+## Sessão, confirmação e falhas
+
+Sessão e autorização ficam em memória, com IDs separados para interação e captura.
+Resultados atrasados são descartados; cada ação confirmada pode ser despachada uma vez.
+A confirmação comum aceita “sim”, “confirmo” ou “pode executar”; “não” cancela.
+Limite de 30 segundos com uma repetição inconclusiva; no máximo um esclarecimento.
+
+TTS: SAPI em thread própria no Windows; processo exclusivo say no macOS; eSpeak NG
+em PT-BR no Linux. Textos são dados, sem shell. Vosk pequeno PT reconhece exclusivamente
+interrupções isoladas (“parar”, “cancelar” e variantes), inclusive durante TTS ou
+indisponibilidade da IA. Consultas contendo essas palavras não são interrupções isoladas.
+Vosk 0.3.45 no Windows/Linux e 0.3.42 no macOS.
+
+Durante TTS bloqueia novas autorizações; após a fala e cauda acústica, descarta buffers
+antes da captura automática. Cancelamento interrompe TTS, invalida respostas pendentes
+e impede próximos despachos. Não desfaz pedidos já entregues ao sistema operacional.
+A espera por fechamento não bloqueia captura, cancelamento ou interface.
+
+Falhas de TTS/interrupção preservam reconhecimento e impedem ações. Falha de integração
+de fechamento não impede aberturas. COMMANDS_ENABLED=0 mantém somente transcrição;
+--demo dispensa microfone/modelos/Docker. Streaming e batch/Celery permanecem disponíveis.
+Encerramento cooperativo libera áudio, TTS, transporte e atualização do catálogo.
+
+## Validação e próximos passos
+
+Testes permanentes cobrem catálogo, variantes, limites, contratos, confirmação, negação,
+silêncio, esclarecimento, cancelamento, alterações de identidade, PID reutilizado,
+segunda autorização, resultados atrasados, execução duplicada e regressões de áudio.
+Testes nativos Windows optativos criam exclusivamente janelas descartáveis da suíte.
+
+Resultados medidos estão no HistoricoEvolucao.md. Ainda são necessários testes nativos
+macOS Intel/Apple Silicon, Linux X11, GNOME/Wayland e matriz completa Windows 10/11,
+além da aceitação acústica por usuários reais. Instalação, diagnóstico e preparação
+da extensão GNOME estão no README.
+
+Fora desta etapa: abas individuais, digitação/cliques/rolagem gerais, UI Automation,
+respostas automáticas a diálogos de salvamento, fechamento de serviços, KDE/Wayland,
+visão computacional, sequências gerais, macros, memória persistente e nuvem.
