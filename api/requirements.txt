@@ -3,6 +3,3 @@ uvicorn[standard]
 celery
 redis
 python-multipart
-websockets>=14,<16
-httpx>=0.27,<1
-pydantic>=2.10,<3

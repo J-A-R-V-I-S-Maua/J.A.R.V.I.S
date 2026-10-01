@@ -129,37 +129,25 @@ Remove-Item Env:COMMANDS_ENABLED
 Após a preparação acima, execute `.venv\Scripts\python.exe main.py` na raiz do projeto.
 
 O Docker Desktop precisa estar em execução antes de iniciar os containers.
-A transcrição em streaming exige a API e o novo serviço `realtime` disponíveis.
-Na primeira inicialização, o `realtime` baixa o Whisper `base` para o volume de cache
-e aquece o modelo antes de aceitar conexões. Acompanhe com `docker compose logs -f realtime`;
-`Application startup complete` indica que está pronto. Os próximos inícios reutilizam o cache.
-A demonstração `--demo` continua funcionando sem Docker.
+A speakbar pode abrir sem Docker, mas a transcrição exige API, Redis e worker disponíveis.
 
 - Aguarde “Aguardando comando” e diga **“hey jarvis”** ou clique no botão de ondas.
-- A barra mostra “Ouvindo…” e começa a exibir transcrições parciais enquanto você fala.
-  Cada hipótese substitui a anterior: palavras podem ser corrigidas durante a fala.
-- Após aproximadamente **2 segundos de silêncio**, a captura termina. A última parcial
-  permanece visível enquanto o servidor finaliza; depois é substituída pelo resultado final.
-  Sem fala, a interação termina após **10 segundos**; cada comando dura no máximo **30 segundos**.
-- Com ações habilitadas, o texto final segue para a IA e a barra mostra interpretação,
-  pergunta, confirmação e resultado. No modo somente transcrição, a frase final permanece.
-  A wake word volta ao término da interação.
+- A barra mostra “Ouvindo…” durante a gravação e “Transcrevendo…” durante o envio e a consulta.
+- A frase completa aparece quando a transcrição termina e permanece até o próximo comando.
+  A wake word volta a ficar ativa enquanto esse resultado continua visível.
 - A barra expande para até três linhas. Textos maiores têm rolagem por mouse e teclado.
   Arraste a área central para reposicioná-la; a posição não é salva.
-- Clique novamente nas ondas durante captura ou transcrição para cancelar.
-  Uma inferência já iniciada pode terminar no servidor, mas seu resultado será descartado.
+- Clique novamente nas ondas durante gravação ou transcrição para cancelar.
+  Se a tarefa já chegou ao servidor, ela pode terminar, mas seu resultado não será mostrado.
 - X, Alt+F4 e “Sair” encerram a interface e a captura de áudio. Durante uma operação em
   andamento, a barra mostra “Encerrando…” até liberar os recursos; ela não fica minimizada.
 - Tab navega entre voz, fechar e texto; Enter/Espaço ativam os botões.
   Com o texto focado, setas e PageUp/PageDown permitem navegar pela transcrição.
-- Falhas de áudio, modelos ou conexão permitem nova tentativa pelo botão.
-  Em caso de desconexão, uma parcial nunca é tratada como resultado final.
-  Uma interação sem fala volta à escuta da wake word automaticamente.
+- Falhas de áudio ou modelos permitem nova tentativa pelo botão. Em falhas de transcrição,
+  verifique o Docker e tente um novo comando por voz ou pelo botão.
 
-No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
-ou uploads gravados no servidor. As gravações anteriores são preservadas.
-Nos sistemas suportados, ações e confirmação por voz ficam habilitadas por padrão;
-`COMMANDS_ENABLED=0` preserva o reconhecimento isolado.
+A gravação mantém `RECORD_SECONDS` (5 segundos por padrão). Não há transcrição parcial
+enquanto se fala, execução de comandos por IA ou confirmação por voz nesta etapa.
 A aparência preserva transparência e gradiente, sem desfoque nativo.
 
 ### Modos de execução
@@ -178,88 +166,15 @@ basta instalar `speakbar/requirements.txt`; para o terminal com ações, instale
 requirements da raiz. `wakeword/requirements.txt` atende o terminal somente de
 transcrição (`COMMANDS_ENABLED=0`).
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
-O serviço `realtime` atende uma conexão de reconhecimento por vez.
-
-### Configuração e modo anterior
-
-| Variável | Padrão | Efeito |
-| --- | --- | --- |
-| `TRANSCRIPTION_MODE` | `stream` | `stream` usa parciais; `batch` usa gravação e upload antigos. |
-| `STREAM_SILENCE_SECONDS` | `2` | Silêncio necessário para finalizar depois de detectar fala. |
-| `STREAM_START_TIMEOUT_SECONDS` | `10` | Espera máxima pela primeira fala. |
-| `STREAM_MAX_SECONDS` | `30` | Duração máxima da interação, incluindo espera inicial. |
-| `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
-| `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
-| `COMMANDS_ENABLED` | `1` | Ações nos sistemas suportados quando as dependências estão prontas; `0` preserva somente transcrição. |
-| `TTS_VOICE` | primeira voz PT-BR encontrada | Seleção opcional de voz instalada para `say` no macOS. |
-| `OLLAMA_MODEL` | `qwen3:4b-instruct` | Modelo do backend; definir antes de recriar a API e baixar o mesmo modelo. |
-| `INTERRUPT_MODEL_DIR` | cache do usuário | Caminho de um modelo Vosk PT já extraído no host. |
-
-Os três tempos de streaming aceitam números positivos até 30 segundos. Para pausas
-maiores durante a fala, aumente `STREAM_SILENCE_SECONDS`, respeitando a duração máxima.
-Defina as variáveis antes de iniciar o aplicativo. Exemplo no PowerShell:
-
-```powershell
-$env:STREAM_SILENCE_SECONDS = "3"
-.venv\Scripts\python.exe main.py
-```
-
-Para voltar ao fluxo antigo no PowerShell:
-
-```powershell
-$env:TRANSCRIPTION_MODE = "batch"
-.venv\Scripts\python.exe main.py
-# Voltar ao streaming:
-Remove-Item Env:TRANSCRIPTION_MODE
-```
-
-No Linux/macOS: `TRANSCRIPTION_MODE=batch python main.py`.
-O modo batch mantém WAVs, `RECORD_SECONDS`, upload e consulta a cada 500 ms com limite
-de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
 
 ### Organização da integração
 
-- Com ações habilitadas, `host_agent` possui o único stream do microfone, distribui
-  áudio para wake word ONNX, Silero VAD e interrupção Vosk. `wakeword` preserva o modo
-  independente de transcrição. O reconhecimento recebe PCM16
-  mono a 16 kHz em blocos de 80 ms; uma thread de transporte recebe parciais simultaneamente.
-- `speakbar` recebe eventos pelo controlador Qt. Captura, modelos e rede ficam fora da
-  thread gráfica; as ondas animam apenas durante a captura.
-- `api` encaminha o WebSocket `/transcribe/stream` ao container `realtime` pela rede interna.
-- `worker/realtime.py` carrega uma instância de Whisper **base / CPU / INT8 / 4 threads**,
-  com português, `beam_size=1` e temperatura zero. O processo é separado do Celery.
-- A cada segundo de áudio adicional, o servidor reprocessa o contexto acumulado. Há no
-  máximo uma inferência ativa e uma versão mais recente pendente, limitada a 30 segundos.
-- Uploads manuais e GET `/transcribe/{task_id}/status` permanecem disponíveis. O modelo
-  Whisper do worker Celery, a retenção de uploads e os resultados desses endpoints não mudaram.
-
-Arquitetura atual: [ResumoArquitetura.md](ResumoArquitetura.md).
-
-### Testes
-
-```powershell
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.venv\Scripts\python.exe -m pytest -q
-```
-
-Por padrão, os testes não abrem aplicativos: verificam contratos, catálogo,
-confirmação, cancelamento, fechamento e controle de áudio. Para os três testes nativos
-Windows, que criam e encerram exclusivamente janelas descartáveis da própria suíte:
-
-```powershell
-$env:JARVIS_NATIVE_TESTS = "1"
-.venv\Scripts\python.exe -m pytest -q tests/test_native_windows.py
-Remove-Item Env:JARVIS_NATIVE_TESTS
-```
-
-Os testes permanentes ficam em `tests/`, incluindo a fixture de janela e diálogo de
-documento não salvo. Resultados medidos estão em [HistoricoEvolucao.md](HistoricoEvolucao.md).
-A validação com fala humana e microfone continua necessária. Em cada novo ambiente,
-teste um aplicativo fora do antigo catálogo, fechamento de um aplicativo aberto
-manualmente, documento descartável não salvo, cancelamento durante fala/espera e a
-segunda confirmação para forçar. Registre descoberta, interpretação e interrupção;
-não use documentos de trabalho nesses testes.
-
+- `wakeword` possui o microfone, o modelo ONNX e o cliente HTTP, emitindo eventos sem depender do Qt.
+- `speakbar` adapta esses eventos para a interface; o trabalho de áudio e rede roda em uma QThread.
+- `api` recebe o upload e disponibiliza o resultado; `worker` continua executando o Whisper.
+- O cliente consulta o task_id a cada 500 ms, com limite de 120 segundos. Resultados cancelados
+  são descartados pela identificação da interação. As falhas do GET retornam
+  `result: null` e `error` textual; o formato de sucesso permanece o mesmo.
 ## Reconhecimento de voz e modelos
 
 O serviço de voz escuta o wake word **"hey jarvis"** no microfone.
@@ -274,10 +189,9 @@ implementação também foi validada com Python 3.12. No Linux, openWakeWord 0.6
 `tflite-runtime` como dependência transitiva de instalação, mesmo ao usar ONNX.
 Os wheels dessa dependência não cobrem Python 3.12; use uma venv Python 3.11 no Linux.
 
-Na primeira execução, os três modelos ONNX da wake word e o Silero VAD são baixados para
+Na primeira execução, três modelos ONNX oficiais são baixados para
 `~/.cache/jarvis/openwakeword-0.6.0` (`~` é a pasta do usuário, também no Windows).
-Depois, esses modelos funcionam offline. O Whisper tem seu cache separado no Docker.
-Para escolher outro diretório dos modelos ONNX, defina a variável
+Depois, a detecção funciona offline. Para escolher outro diretório, defina a variável
 de ambiente `WAKEWORD_MODELS_DIR`. Downloads interrompidos são descartados e tentados
 novamente na próxima execução. O microfone só é aberto após carregar os modelos.
 
@@ -295,10 +209,11 @@ python main.py --headless
 
 Pare com `Ctrl + C`. Saia da venv com `deactivate`.
 
-Ao detectar a chamada, o serviço inicia a captura contínua com parciais até a pausa.
-A conexão com o backend é preparada antes de indicar disponibilidade. Os modelos
-continuam locais: depois dos downloads iniciais, não é necessário enviar áudio a serviços
-externos. `DETECTION_THRESHOLD` define o limiar da wake word (padrão `0.3`).
+Ao detectar a chamada, o serviço grava o comando (5 segundos por padrão) e o envia
+à API de transcrição. Essa etapa precisa dos serviços do `docker-compose.yml` em
+execução; a detecção isolada não precisa deles. `API_URL` define o endereço da API
+(padrão `http://localhost:8000`), `RECORD_SECONDS` define a duração da gravação e
+`DETECTION_THRESHOLD` define o limiar da detecção (padrão `0.3`).
 
 ## Windows
 
@@ -359,23 +274,14 @@ gerenciador da distribuição ou por um gerenciador de versões antes de criar a
 No Fedora, PortAudio usa `portaudio-devel`; no Arch, `portaudio`.
 Use uma sessão desktop com dispositivo de entrada disponível.
 
-PyGObject/GIO realiza a descoberta e o lançamento; python-xlib atende X11.
-Confira a voz com `espeak-ng -v pt-br "Teste de voz"`. Prepare Docker/Ollama como na
-seção inicial e execute `python -m host_agent.interrupt` para preparar o Vosk.
-Para somente transcrição: `COMMANDS_ENABLED=0 python main.py` (também no macOS).
-
-No **GNOME/Wayland**, instale a extensão incluída no projeto:
+### Verificação da integração
 
 ```bash
-mkdir -p ~/.local/share/gnome-shell/extensions
-cp -R integrations/gnome/jarvis-window-control@jarvis.local ~/.local/share/gnome-shell/extensions/
-# Na primeira instalação, saia da sessão e entre novamente para o GNOME descobri-la.
-gnome-extensions enable jarvis-window-control@jarvis.local
-gnome-extensions info jarvis-window-control@jarvis.local
+python -m unittest discover -s tests -v
 ```
 
-A extensão declara GNOME Shell 46–50; essa matriz ainda não foi validada nativamente.
-Ela expõe somente consulta e fechamento de janelas via D-Bus, sem comandos de shell
-nem execução de código fornecido pelo host. Sem a extensão ativa, o diagnóstico
-explica a indisponibilidade do fechamento. KDE/Wayland, controle de abas, UI Automation,
-digitação/cliques/rolagem gerais e respostas automáticas a diálogos ficam para depois.
+Os testes automatizados usam microfone e rede simulados, incluindo cancelamento, falhas,
+texto longo e encerramento da thread. No Windows, também foi validado o fluxo com Docker
+e reprodução do áudio já gravado no projeto: o texto da API foi comparado ao da speakbar.
+A aparência foi conferida em 100%, 125% e 150%. A transcrição de uma nova fala ao vivo e a
+execução nativa em Linux/macOS ainda precisam ser verificadas nesses equipamentos.

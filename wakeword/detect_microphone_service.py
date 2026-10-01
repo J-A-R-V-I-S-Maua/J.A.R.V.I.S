@@ -77,14 +77,13 @@ class VoiceService:
         with self._lock:
             return self._snapshot
 
-    def _publish(self, state, text=None, *, interaction_id=None, task_id=None, sequence=0, is_final=False):
+    def _publish(self, state, text=None, *, interaction_id=None, task_id=None):
         with self._lock:
             if interaction_id is not None and interaction_id != self._interaction_id:
                 return
             if self.stop_requested.is_set() and state not in (State.STOPPING, State.STOPPED):
                 return
-            event = VoiceEvent(state, text or state.value, self._interaction_id, task_id,
-                               sequence, is_final or state is State.RESULT)
+            event = VoiceEvent(state, text or state.value, self._interaction_id, task_id)
             self._snapshot = event
             self.on_event(event)
 
@@ -116,10 +115,7 @@ class VoiceService:
                 self.trigger_requested.clear()
                 return
 
-    def _check_ready(self):
-        pass
-
-    def _capture(self, model, capture=None):
+    def _capture(self, model):
         import numpy as np
         import pyaudio
         with ExitStack() as resources:
@@ -135,7 +131,6 @@ class VoiceService:
                 self._publish(State.IDLE)
             while True:
                 check_cancelled(self.stop_requested.is_set)
-                self._check_ready()
                 manual = self.trigger_requested.is_set()
                 if not manual:
                     chunk = _read_chunk(stream, self.stop_requested.is_set)
@@ -149,9 +144,8 @@ class VoiceService:
                     self._interaction_id += 1
                     interaction_id = self._interaction_id
                     self._publish(State.LISTENING)
-                path = capture(stream, audio, interaction_id) if capture else record_audio(
-                    RECORD_SECONDS, mic_stream=stream, audio_interface=audio,
-                    cancelled=self.cancel_requested.is_set)
+                path = record_audio(RECORD_SECONDS, mic_stream=stream, audio_interface=audio,
+                                    cancelled=self.cancel_requested.is_set)
                 check_cancelled(self.cancel_requested.is_set)
                 return path, interaction_id
         # ExitStack releases the device before the upload and polling begin.
@@ -214,23 +208,9 @@ class VoiceService:
             self._publish(State.STOPPED)
 
 
-def create_service(on_event=lambda event: None):
-    import sys
-    if sys.platform in {"win32", "linux", "darwin"} and os.getenv("COMMANDS_ENABLED", "1") != "0":
-        from host_agent.service import AssistantService
-        return AssistantService(on_event)
-    mode = os.getenv("TRANSCRIPTION_MODE", "stream").lower()
-    if mode == "batch":
-        return VoiceService(on_event)
-    if mode == "stream":
-        from .streaming_service import StreamingVoiceService
-        return StreamingVoiceService(on_event)
-    raise ValueError("TRANSCRIPTION_MODE deve ser stream ou batch")
-
-
 def start():
     def report(event):
         print(event.text, flush=True)
         if event.task_id:
             print(f"task_id={event.task_id}", flush=True)
-    create_service(report).run()
+    VoiceService(report).run()

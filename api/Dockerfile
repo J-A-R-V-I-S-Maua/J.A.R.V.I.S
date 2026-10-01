@@ -3,7 +3,6 @@ FROM python:3.11-slim
 WORKDIR /app
 COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY api/*.py .
-COPY contracts ./contracts
+COPY controller.py .
 
 CMD ["uvicorn", "controller:app", "--host", "0.0.0.0", "--port", "8000"]

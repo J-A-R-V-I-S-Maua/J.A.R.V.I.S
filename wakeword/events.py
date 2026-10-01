@@ -25,8 +25,6 @@ class VoiceEvent:
     text: str
     interaction_id: int = 0
     task_id: str | None = None
-    sequence: int = 0
-    is_final: bool = False
 
 
 class Cancelled(Exception):

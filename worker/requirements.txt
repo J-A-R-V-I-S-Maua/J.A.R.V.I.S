@@ -2,5 +2,3 @@ celery
 redis
 requests
 faster-whisper
-fastapi
-uvicorn[standard]

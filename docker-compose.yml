@@ -42,32 +42,6 @@ services:
     command: celery -A task beat --loglevel=info
     restart: unless-stopped
 
-  realtime:
-    build: ./worker
-    cpuset: "0-1"
-    command: uvicorn realtime:app --host 0.0.0.0 --port 8001 --ws-max-size 4096 --ws-max-queue 8
-    volumes:
-      - whisper-cache:/root/.cache/huggingface
-    expose:
-      - "8001"
-    restart: unless-stopped
-
-  ollama:
-    image: ollama/ollama:0.34.2
-    cpuset: "2-3"
-    cpus: "2"
-    environment:
-      - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_MAX_LOADED_MODELS=1
-      - OLLAMA_CONTEXT_LENGTH=4096
-      - OLLAMA_NO_CLOUD=1
-      - OLLAMA_NUM_THREADS=2
-    volumes:
-      - ollama-models:/root/.ollama
-    expose:
-      - "11434"
-    restart: unless-stopped
-
   api:
     build:
       context: .
@@ -93,4 +67,3 @@ volumes:
   redis-data:
   whisper-cache:
   audio-uploads:
-  ollama-models:
