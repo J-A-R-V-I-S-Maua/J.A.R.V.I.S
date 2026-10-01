@@ -216,9 +216,9 @@ class VoiceService:
 
 def create_service(on_event=lambda event: None):
     import sys
-    if sys.platform == "win32" and os.getenv("COMMANDS_ENABLED", "1") != "0":
-        from host_agent.service import AssistantService
-        return AssistantService(on_event)
+    # if os.getenv("COMMANDS_ENABLED", "1") != "0":
+    #     from host_agent.service import AssistantService
+    #     return AssistantService(on_event)
     mode = os.getenv("TRANSCRIPTION_MODE", "stream").lower()
     if mode == "batch":
         return VoiceService(on_event)

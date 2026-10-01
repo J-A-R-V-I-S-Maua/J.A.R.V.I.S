@@ -26,7 +26,7 @@ def _run_transcription(path: str, language: str):
         language = language,
         vad_filter = True,
         condition_on_previous_text=False,
-        temperature= 0.2
+        temperature= 0.1
     )
 
     return[
@@ -41,7 +41,10 @@ def _run_transcription(path: str, language: str):
 model = WhisperModel(
     model_size_or_path="small",
     device="cpu",
-    compute_type="float32"
+    compute_type="float32",
+    cpu_threads=2,
+    num_workers=2
+    
 )
 
 @celery_app.task(name="task.transcribe")

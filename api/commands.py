@@ -114,11 +114,11 @@ async def infer(body: InterpretRequest) -> Decision:
         if preferred:
             schema["properties"]["browser"]["enum"] = preferred
             schema["properties"]["app"] = {"type": "string", "enum": ["", *preferred]}
-        async with asyncio.timeout(30), httpx.AsyncClient(timeout=httpx.Timeout(30, connect=3)) as client:
+        async with asyncio.timeout(120), httpx.AsyncClient(timeout=httpx.Timeout(120, connect=3)) as client:
             response = await client.post(f"{OLLAMA_URL}/api/chat", json={
                 "model": MODEL, "stream": False, "keep_alive": "5m",
                 "format": schema,
-                "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 400},
+                "options": {"temperature": 0.2, "num_ctx": 4096, "num_predict": 400},
                 "messages": model_messages(body, allowed_urls),
             })
             response.raise_for_status()

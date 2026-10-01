@@ -20,10 +20,10 @@ class CommandClient:
         return asyncio.run(self._interpret(request, cancelled))
 
     async def _interpret(self, request, cancelled):
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=3)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=3)) as client:
             task = asyncio.create_task(client.post(f"{self.url}/commands/interpret", json=request.model_dump()))
             try:
-                async with asyncio.timeout(31):
+                async with asyncio.timeout(120):
                     while not task.done():
                         check_cancelled(cancelled)
                         await asyncio.wait({task}, timeout=0.025)

@@ -1,6 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
+    cpuset: "0-1"
     ports:
       - "6379:6379"
     volumes:
@@ -13,6 +14,8 @@ services:
 
   worker:
     build: ./worker
+    cpus: "4"
+    cpuset: "4-5"
     depends_on:
       redis:
         condition: service_healthy
@@ -29,6 +32,7 @@ services:
 
   beat:
     build: ./worker
+    cpuset: "2-3"
     depends_on:
       redis:
         condition: service_healthy
@@ -40,6 +44,7 @@ services:
 
   realtime:
     build: ./worker
+    cpuset: "0-1"
     command: uvicorn realtime:app --host 0.0.0.0 --port 8001 --ws-max-size 4096 --ws-max-queue 8
     volumes:
       - whisper-cache:/root/.cache/huggingface
@@ -49,11 +54,14 @@ services:
 
   ollama:
     image: ollama/ollama:0.34.2
+    cpuset: "2-3"
+    cpus: "2"
     environment:
       - OLLAMA_NUM_PARALLEL=1
       - OLLAMA_MAX_LOADED_MODELS=1
       - OLLAMA_CONTEXT_LENGTH=4096
       - OLLAMA_NO_CLOUD=1
+      - OLLAMA_NUM_THREADS=2
     volumes:
       - ollama-models:/root/.ollama
     expose:
@@ -64,6 +72,8 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+    cpuset: "2-3"
+    cpus: "2"
     depends_on:
       redis:
         condition: service_healthy

@@ -12,7 +12,8 @@ from .client import CommandClient
 from .executor import NativeExecutor, confirmation
 from .interrupt import InterruptDetector
 from .speech import Microphone, SpeechInput
-from .tts import WindowsSpeech
+# from .tts import WindowsSpeech 
+# Desabilita o uso do tts para execuções linux | Mac por enquanto
 
 ACTIVE = {State.LISTENING, State.PROCESSING, State.INTERPRETING, State.SPEAKING,
           State.CONFIRMING, State.EXECUTING}
@@ -23,7 +24,7 @@ NO = {"nao", "nao execute", "cancelar", "parar", "pare", "cancelar comando", "pa
 class AssistantService(VoiceService):
     def __init__(self, on_event=lambda event: None, *, command_client=None, executor=None,
                  speaker=None, speech_input=None, microphone_factory=Microphone,
-                 detector_factory=InterruptDetector, speaker_factory=WindowsSpeech, **kwargs):
+                 detector_factory=InterruptDetector, speaker_factory=None, **kwargs):
         super().__init__(on_event, **kwargs)
         self.command_client = command_client or CommandClient()
         self.executor = executor
@@ -174,7 +175,7 @@ class AssistantService(VoiceService):
             detector = None
             try:
                 detector = self.detector_factory(self.stop_requested.is_set)
-                self.speaker = self.speaker or self.speaker_factory()
+                self.speaker = self.speaker # or self.speaker_factory() desabilita para usos linux | Mac
             except Cancelled:
                 raise
             except Exception as exc:

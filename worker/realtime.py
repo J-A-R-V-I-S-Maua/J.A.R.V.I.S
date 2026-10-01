@@ -27,16 +27,16 @@ def load_model():
         except LocalEntryNotFoundError:
             path = hf_hub_download(repo, filename, revision=revision)
         directory = str(Path(path).parent)
-    model = WhisperModel(directory, device="cpu", compute_type="int8", cpu_threads=4, num_workers=1)
+    model = WhisperModel(directory, device="cpu", compute_type="float32", cpu_threads=4, num_workers=1)
     # Aquecimento antes de aceitar conexões.
     list(model.transcribe(np.zeros(16000, dtype=np.float32), language="pt", beam_size=1,
-                          temperature=0, condition_on_previous_text=False)[0])
+                          temperature=0.0, condition_on_previous_text=False)[0])
     return model
 
 
 @asynccontextmanager
 async def lifespan(app):
-    app.state.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+    app.state.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
     loop = asyncio.get_running_loop()
     app.state.model = await loop.run_in_executor(app.state.executor, load_model)
     app.state.connection_lock = asyncio.Lock()
@@ -66,9 +66,9 @@ async def transcribe_stream(socket: WebSocket):
                 began = time.monotonic()
                 samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
                 segments, _ = app.state.model.transcribe(
-                    samples, language="pt", beam_size=1, temperature=0,
+                    samples, language="pt", beam_size=5, temperature=(0.0, 0.2, 0.4),
                     condition_on_previous_text=False, without_timestamps=True,
-                    vad_filter=False,
+                    vad_filter=True,
                 )
                 text = " ".join(" ".join(segment.text for segment in segments).split())
                 logging.getLogger("uvicorn.error").info(
