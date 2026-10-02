@@ -201,4 +201,4 @@ python main.py
 Em distribuições com outro Python padrão, instale Python 3.11 e seus headers pelo
 gerenciador da distribuição ou por um gerenciador de versões antes de criar a venv.
 No Fedora, PortAudio usa `portaudio-devel`; no Arch, `portaudio`.
-Use uma sessão desktop com dispositivo de entrada disponível.
+Use uma sessão desktop com dispositivo de entrada disponível..
