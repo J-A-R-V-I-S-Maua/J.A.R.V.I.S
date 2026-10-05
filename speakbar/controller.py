@@ -3,6 +3,8 @@ import logging
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from commands.dispatcher import CommandDispatcher
+from commands.executor import MockExecutor
 from wakeword.events import State, VoiceEvent
 
 
@@ -27,11 +29,12 @@ class VoiceController(QObject):
     state_changed = Signal(object)
     stopped = Signal()
 
-    def __init__(self, parent=None, service_factory=None):
+    def __init__(self, parent=None, service_factory=None, dispatcher=None):
         super().__init__(parent)
         self.current_event = VoiceEvent(State.PREPARING, State.PREPARING.value)
         self.thread = None
         self.service_factory = service_factory
+        self.dispatcher = dispatcher or CommandDispatcher()
         self.closing = False
 
     @property
@@ -62,6 +65,20 @@ class VoiceController(QObject):
             return
         self.current_event = event
         self.state_changed.emit(event)
+        if event.state is State.RESULT:
+            # Devolve o controle ao Qt para desenhar a transcrição antes de agir.
+            QTimer.singleShot(0, lambda text=event.text: self._dispatch(text))
+
+    def submit_text(self, text):
+        """Comando digitado, sem passar pelo reconhecimento de voz."""
+        if not self.closing:
+            self._dispatch(text)
+
+    def _dispatch(self, text):
+        result = self.dispatcher.handle(text)
+        state = State.EXECUTED if result.recognized else State.UNKNOWN
+        self.current_event = VoiceEvent(state, result.feedback)
+        self.state_changed.emit(self.current_event)
 
     def toggle(self):
         if self.closing:
@@ -108,6 +125,8 @@ class DemoController(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_event = VoiceEvent(State.IDLE, self.MESSAGES[State.IDLE])
+        # A demonstração nunca age de verdade, mesmo com COMMAND_MODE=browser.
+        self.dispatcher = CommandDispatcher(MockExecutor())
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._advance)
@@ -125,6 +144,16 @@ class DemoController(QObject):
 
     def toggle(self):
         self._set_state(State.LISTENING if self.state is State.IDLE else State.IDLE)
+
+    def submit_text(self, text):
+        self._dispatch(text)
+
+    def _dispatch(self, text):
+        self.timer.stop()
+        result = self.dispatcher.handle(text)
+        state = State.EXECUTED if result.recognized else State.UNKNOWN
+        self.current_event = VoiceEvent(state, result.feedback)
+        self.state_changed.emit(self.current_event)
 
     def _set_state(self, state):
         self.timer.stop()
