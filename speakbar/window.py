@@ -3,9 +3,12 @@
 import math
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor, QFont, QIcon, QKeySequence, QLinearGradient, QPainter, QPen, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QTextEdit, QMenu, QPushButton, QSystemTrayIcon, QWidget,
+    QApplication, QHBoxLayout, QLineEdit, QTextEdit, QMenu, QPushButton, QSystemTrayIcon,
+    QWidget,
 )
 
 from .controller import DemoController, VoiceController, State
@@ -149,11 +152,19 @@ class Speakbar(QWidget):
         self.message.drag_started.connect(self._start_drag)
         self.message.drag_moved.connect(self._move_drag)
         self.message.drag_finished.connect(self._end_drag)
+        self.command_input = QLineEdit(self)
+        self.command_input.setFont(font)
+        self.command_input.setPlaceholderText("Digite um comando e pressione Enter")
+        self.command_input.setAccessibleName("Comando digitado")
+        self.command_input.setStyleSheet("QLineEdit { color: #111111; background: transparent; border: 0; border-bottom: 1px solid #005ea8; }")
+        self.command_input.hide()
+        self.command_input.returnPressed.connect(self._submit_command)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 5, 12, 5)
         layout.setSpacing(12)
         layout.addWidget(self.voice)
         layout.addWidget(self.message, 1)
+        layout.addWidget(self.command_input, 1)
         layout.addWidget(self.close_button)
         self.setTabOrder(self.voice, self.close_button)
         self.setTabOrder(self.close_button, self.message)
@@ -163,10 +174,16 @@ class Speakbar(QWidget):
         self.controller.stopped.connect(self._finish_quit)
         self._render_state(self.controller.current_event)
 
+        self.type_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
+        self.type_shortcut.activated.connect(self.toggle_command_input)
+        self.cancel_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self.cancel_shortcut.activated.connect(self._hide_command_input)
+
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
         self.tray.setToolTip(self.windowTitle())
         self.tray_menu = QMenu()
         self.tray_menu.addAction("Mostrar barra", self.restore)
+        self.tray_menu.addAction("Digitar comando", self.toggle_command_input)
         self.tray_menu.addSeparator()
         self.tray_menu.addAction("Sair", self.quit)
         self.tray.setContextMenu(self.tray_menu)
@@ -190,6 +207,29 @@ class Speakbar(QWidget):
     def _screen_added(self, screen):
         self._connect_screen(screen)
         self.keep_on_screen()
+
+    def toggle_command_input(self):
+        if self.command_input.isVisible():
+            self._hide_command_input()
+            return
+        self.restore()
+        self.message.hide()
+        self.command_input.clear()
+        self.command_input.show()
+        self.command_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _hide_command_input(self):
+        if not self.command_input.isVisible():
+            return
+        self.command_input.hide()
+        self.message.show()
+        self._update_message()
+
+    def _submit_command(self):
+        text = self.command_input.text().strip()
+        self._hide_command_input()
+        if text:
+            self.controller.submit_text(text)
 
     def _render_state(self, event):
         self._update_message()
