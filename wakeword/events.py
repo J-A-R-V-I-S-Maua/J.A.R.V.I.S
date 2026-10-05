@@ -9,6 +9,8 @@ class State(Enum):
     LISTENING = "Ouvindo…"
     PROCESSING = "Transcrevendo…"
     RESULT = "Transcrição concluída"
+    EXECUTED = "Comando executado"
+    UNKNOWN = "Comando não reconhecido"
     ERROR = "Não foi possível concluir"
     CANCELLING = "Cancelando…"
     STOPPING = "Encerrando…"
