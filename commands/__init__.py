@@ -1,0 +1,1 @@
+"""Camada de comandos do host: texto em ação no navegador."""
