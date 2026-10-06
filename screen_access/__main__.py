@@ -14,6 +14,14 @@ def main() -> int:
     parser.add_argument("--max-depth", type=int, default=12, help="profundidade máxima da árvore")
     parser.add_argument("--max-elements", type=int, default=200, help="quantidade máxima de elementos")
     parser.add_argument("--clickable", action="store_true", help="lista só os elementos acionáveis (AXPress)")
+    parser.add_argument(
+        "--include-hidden", action="store_true",
+        help="com --clickable, inclui também os elementos fora da área visível",
+    )
+    parser.add_argument(
+        "--show-frames", action="store_true",
+        help="com --clickable, mostra a posição e o tamanho de cada item (diagnóstico)",
+    )
     args = parser.parse_args()
 
     if not has_accessibility_permission():
@@ -58,24 +66,48 @@ def main() -> int:
     return 0
 
 
+def describe_frame(frame) -> str:
+    if frame is None:
+        return "sem posição"
+    x, y, width, height = (round(value) for value in frame)
+    return f"x={x} y={y} larg={width} alt={height}"
+
+
 def print_clickable(window, args) -> int:
-    """Lista numerada só dos elementos que aceitam AXPress, sem repetições."""
+    """Lista numerada só dos controles interativos (por papel e ação), sem repetições."""
     visited = 0
     seen = set()
     unnamed = 0
-    for _, element in macos.walk(window, args.max_depth):
+    window_frame = macos.element_frame(window)
+    if args.include_hidden or window_frame is None:
+        nodes = ((element, None) for _, element in macos.walk(window, args.max_depth))
+        print("(incluindo elementos fora da tela)\n")
+    else:
+        nodes = (
+            (element, clip)
+            for _, element, clip in macos.walk_with_clip(window, args.max_depth, window_frame)
+        )
+    if args.show_frames:
+        print(f"Janela: {describe_frame(window_frame)}\n")
+    for element, clip in nodes:
         if visited >= args.max_elements:
             print(f"... limite de {args.max_elements} elementos visitados atingido")
             break
         visited += 1
-        if element in seen or not macos.can_press(element):
+        role = macos.element_role(element)
+        if args.show_frames and role in macos.CLIP_ROLES:
+            print(f"    região {role}: {describe_frame(macos.element_frame(element))}")
+        if element in seen or not macos.is_interactive(element, role):
+            continue
+        if clip is not None and not macos.is_visible(element, clip):
             continue
         seen.add(element)
         name = macos.element_name(element)
         if not name:
             unnamed += 1
             name = "(sem nome)"
-        print(f"[{len(seen)}] {macos.element_role(element)} {name[:90]!r}")
+        where = f"  @ {describe_frame(macos.element_frame(element))}" if args.show_frames else ""
+        print(f"[{len(seen)}] {role} {name[:120]!r}{where}")
     print(f"\n{visited} elementos visitados, {len(seen)} acionáveis ({unnamed} sem nome).")
     return 0
 
