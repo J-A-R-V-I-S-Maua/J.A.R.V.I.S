@@ -5,6 +5,7 @@ from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
     AXUIElementCreateApplication,
+    AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
     AXValueGetValue,
     kAXChildrenAttribute,
@@ -91,6 +92,26 @@ def can_press(element):
     """Verdadeiro se o elemento declara a ação AXPress (ou seja, pode ser ativado)."""
     error, actions = AXUIElementCopyActionNames(element, None)
     return error == kAXErrorSuccess and kAXPressAction in (actions or ())
+
+
+AX_ERRORS = {
+    -25200: "falha genérica",
+    -25202: "elemento inválido (a tela provavelmente mudou)",
+    -25204: "o aplicativo não conseguiu completar a ação",
+    -25205: "atributo não suportado",
+    -25206: "o elemento não aceita essa ação",
+    -25208: "não implementado pelo aplicativo",
+    -25211: "API de acessibilidade desativada (falta permissão)",
+}
+
+
+def press(element):
+    """Aciona o elemento (AXPress), sem mover o cursor. Devolve o código de erro; 0 = aceito."""
+    return AXUIElementPerformAction(element, kAXPressAction)
+
+
+def describe_error(code):
+    return AX_ERRORS.get(code, "erro desconhecido")
 
 
 ACTION_ROLES = frozenset({

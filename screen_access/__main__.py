@@ -1,8 +1,10 @@
 import argparse
 import time
 
-from . import macos
+from . import macos, matching
 from .permissions import has_accessibility_permission
+
+NO_NAME = "(sem nome)"
 
 
 def main() -> int:
@@ -21,6 +23,10 @@ def main() -> int:
     parser.add_argument(
         "--show-frames", action="store_true",
         help="com --clickable, mostra a posição e o tamanho de cada item (diagnóstico)",
+    )
+    parser.add_argument(
+        "--press", action="store_true",
+        help="lista os itens acionáveis e aciona o que você escolher pelo número (pede confirmação)",
     )
     args = parser.parse_args()
 
@@ -50,8 +56,9 @@ def main() -> int:
     print(f"Janela: {macos.window_title(window)!r}")
     print()
 
-    if args.clickable:
-        return print_clickable(window, args)
+    if args.clickable or args.press:
+        items = print_clickable(window, args)
+        return press_by_number(items) if args.press else 0
 
     count = 0
     for depth, element in macos.walk(window, args.max_depth):
@@ -73,10 +80,14 @@ def describe_frame(frame) -> str:
     return f"x={x} y={y} larg={width} alt={height}"
 
 
-def print_clickable(window, args) -> int:
-    """Lista numerada só dos controles interativos (por papel e ação), sem repetições."""
+def print_clickable(window, args) -> list:
+    """Lista numerada dos controles interativos (por papel e ação), sem repetições.
+
+    Devolve [(elemento, papel, nome)] na mesma ordem dos números impressos.
+    """
     visited = 0
     seen = set()
+    items = []
     unnamed = 0
     window_frame = macos.element_frame(window)
     if args.include_hidden or window_frame is None:
@@ -105,11 +116,59 @@ def print_clickable(window, args) -> int:
         name = macos.element_name(element)
         if not name:
             unnamed += 1
-            name = "(sem nome)"
+            name = NO_NAME
+        items.append((element, role, name))
         where = f"  @ {describe_frame(macos.element_frame(element))}" if args.show_frames else ""
         print(f"[{len(seen)}] {role} {name[:120]!r}{where}")
     print(f"\n{visited} elementos visitados, {len(seen)} acionáveis ({unnamed} sem nome).")
-    return 0
+    return items
+
+
+def choose_item(items):
+    """Pergunta qual item (número ou frase) e devolve a posição dele, ou None se não houver escolha.
+
+    Se a frase combinar com vários itens, mostra as opções e aceita um único esclarecimento.
+    """
+    names = ["" if name == NO_NAME else name for _, _, name in items]
+    answer = input("\nNúmero ou frase do item a acionar (Enter para sair): ").strip()
+    if not answer:
+        return None
+    choice = matching.choose(answer, names)
+    if choice.status == "none":
+        print("Não encontrei nenhum item que combine com isso.")
+        return None
+    if choice.status == "match":
+        return choice.index
+    print("Vários itens combinam com isso:")
+    for index in choice.candidates:
+        print(f"  [{index + 1}] {items[index][1]} {items[index][2][:80]!r}")
+    answer = input("Qual deles? (número, Enter para cancelar): ").strip()
+    if not answer:
+        return None
+    if answer.isdigit() and int(answer) - 1 in choice.candidates:
+        return int(answer) - 1
+    print("Esse número não está entre as opções.")
+    return None
+
+
+def press_by_number(items) -> int:
+    """Escolhe um item por número ou frase, confirma e aciona. Uma ação por execução."""
+    if not items:
+        print("Nenhum item para acionar.")
+        return 1
+    index = choose_item(items)
+    if index is None:
+        return 0
+    element, role, name = items[index]
+    if input(f"Acionar [{index + 1}] {role} {name[:80]!r}? (s/n): ").strip().lower() != "s":
+        print("Cancelado.")
+        return 0
+    code = macos.press(element)
+    if code == 0:
+        print("Pedido aceito pelo aplicativo.")
+        return 0
+    print(f"Recusado: {macos.describe_error(code)} (código {code}).")
+    return 1
 
 
 if __name__ == "__main__":
