@@ -62,6 +62,31 @@ class ChooseTest(unittest.TestCase):
     def test_item_sem_nome_nunca_casa_por_nome(self):
         self.assertEqual(choose("sem nome", NAMES).status, "none")
 
+    def test_verbo_distorcido_pelo_reconhecimento_e_ignorado(self):
+        # O Whisper já entregou "abriu", "abril" e "abrem" no lugar de "abrir".
+        for verb in ("abrir", "abriu", "abril", "abrem", "abre"):
+            with self.subTest(verb=verb):
+                self.assertEqual(choose(f"{verb} filosofia kant", NAMES).index, 9)
+
+    def test_nome_proprio_mal_transcrito(self):
+        # O Whisper já entregou "can", "cant", "cante" e "cantem" no lugar de "Kant".
+        for heard in ("cant", "cante", "cantem.", "can"):
+            with self.subTest(heard=heard):
+                self.assertEqual(choose(f"abrir filosofia {heard}", NAMES).index, 9)
+
+    def test_fala_cortada_nao_escolhe_nada_por_engano(self):
+        self.assertEqual(choose("Abriu. Fio.", NAMES).status, "none")
+
+    def test_palavra_errada_nao_e_perdoada(self):
+        self.assertEqual(choose("abrir filosofia futebol", NAMES).status, "none")
+
+    def test_som_de_c_e_k(self):
+        from screen_access.matching import sound_key
+
+        self.assertEqual(sound_key("cant"), sound_key("kant"))
+        self.assertEqual(sound_key("quero"), sound_key("kero"))
+        self.assertNotEqual(sound_key("cena"), sound_key("kena"))
+
 
 if __name__ == "__main__":
     unittest.main()
