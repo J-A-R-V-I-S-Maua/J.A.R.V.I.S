@@ -1,10 +1,9 @@
 import argparse
 import time
 
-from . import macos, matching
+from . import flow, macos
+from .flow import NO_NAME
 from .permissions import has_accessibility_permission
-
-NO_NAME = "(sem nome)"
 
 
 def main() -> int:
@@ -124,51 +123,18 @@ def print_clickable(window, args) -> list:
     return items
 
 
-def choose_item(items):
-    """Pergunta qual item (número ou frase) e devolve a posição dele, ou None se não houver escolha.
-
-    Se a frase combinar com vários itens, mostra as opções e aceita um único esclarecimento.
-    """
-    names = ["" if name == NO_NAME else name for _, _, name in items]
-    answer = input("\nNúmero ou frase do item a acionar (Enter para sair): ").strip()
-    if not answer:
-        return None
-    choice = matching.choose(answer, names)
-    if choice.status == "none":
-        print("Não encontrei nenhum item que combine com isso.")
-        return None
-    if choice.status == "match":
-        return choice.index
-    print("Vários itens combinam com isso:")
-    for index in choice.candidates:
-        print(f"  [{index + 1}] {items[index][1]} {items[index][2][:80]!r}")
-    answer = input("Qual deles? (número, Enter para cancelar): ").strip()
-    if not answer:
-        return None
-    if answer.isdigit() and int(answer) - 1 in choice.candidates:
-        return int(answer) - 1
-    print("Esse número não está entre as opções.")
-    return None
-
-
 def press_by_number(items) -> int:
-    """Escolhe um item por número ou frase, confirma e aciona. Uma ação por execução."""
+    """Escolhe um item por número ou frase digitada, confirma e aciona. Uma ação por execução."""
     if not items:
         print("Nenhum item para acionar.")
         return 1
-    index = choose_item(items)
+    answer = input("\nNúmero ou frase do item a acionar (Enter para sair): ").strip()
+    if not answer:
+        return 0
+    index = flow.resolve(answer, items)
     if index is None:
         return 0
-    element, role, name = items[index]
-    if input(f"Acionar [{index + 1}] {role} {name[:80]!r}? (s/n): ").strip().lower() != "s":
-        print("Cancelado.")
-        return 0
-    code = macos.press(element)
-    if code == 0:
-        print("Pedido aceito pelo aplicativo.")
-        return 0
-    print(f"Recusado: {macos.describe_error(code)} (código {code}).")
-    return 1
+    return flow.confirm_and_press(index, items, macos.press, macos.describe_error)
 
 
 if __name__ == "__main__":
