@@ -15,16 +15,15 @@ docker compose up --build -d
 
 O Docker Desktop precisa estar em execução antes de iniciar os containers.
 A transcrição em streaming exige a API e o novo serviço `realtime` disponíveis.
-Na primeira inicialização, o `realtime` baixa o Whisper `base` para o volume de cache
+Na primeira inicialização, o `realtime` baixa o Whisper `small` para o volume de cache
 e aquece o modelo antes de aceitar conexões. Acompanhe com `docker compose logs -f realtime`;
 `Application startup complete` indica que está pronto. Os próximos inícios reutilizam o cache.
 A demonstração `--demo` continua funcionando sem Docker.
 
 - Aguarde “Aguardando comando” e diga **“hey jarvis”** ou clique no botão de ondas.
-- A barra mostra “Ouvindo…” e começa a exibir transcrições parciais enquanto você fala.
-  Cada hipótese substitui a anterior: palavras podem ser corrigidas durante a fala.
-- Após aproximadamente **2 segundos de silêncio**, a captura termina. A última parcial
-  permanece visível enquanto o servidor finaliza; depois é substituída pelo resultado final.
+- A barra mostra “Ouvindo…” durante toda a fala.
+- Após aproximadamente **2 segundos de silêncio**, a captura termina e a barra mostra
+  “Transcrevendo…”. O servidor transcreve o áudio completo uma única vez e exibe a frase final.
   Sem fala, a interação termina após **10 segundos**; cada comando dura no máximo **30 segundos**.
 - A frase final permanece até o próximo comando.
   A wake word volta a ficar ativa enquanto esse resultado continua visível.
@@ -37,7 +36,7 @@ A demonstração `--demo` continua funcionando sem Docker.
 - Tab navega entre voz, fechar e texto; Enter/Espaço ativam os botões.
   Com o texto focado, setas e PageUp/PageDown permitem navegar pela transcrição.
 - Falhas de áudio, modelos ou conexão permitem nova tentativa pelo botão.
-  Em caso de desconexão, uma parcial nunca é tratada como resultado final.
+  Em caso de desconexão, a barra informa a falha sem apresentar uma transcrição incompleta.
   Uma interação sem fala volta à escuta da wake word automaticamente.
 
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
@@ -66,10 +65,13 @@ O serviço `realtime` atende uma conexão de reconhecimento por vez.
 
 | Variável | Padrão | Efeito |
 | --- | --- | --- |
-| `TRANSCRIPTION_MODE` | `stream` | `stream` usa parciais; `batch` usa gravação e upload antigos. |
+| `TRANSCRIPTION_MODE` | `stream` | `stream` envia áudio por WebSocket e transcreve após a fala; `batch` usa gravação e upload antigos. |
 | `STREAM_SILENCE_SECONDS` | `2` | Silêncio necessário para finalizar depois de detectar fala. |
 | `STREAM_START_TIMEOUT_SECONDS` | `10` | Espera máxima pela primeira fala. |
 | `STREAM_MAX_SECONDS` | `30` | Duração máxima da interação, incluindo espera inicial. |
+| `STREAM_PRE_ROLL_SECONDS` | `0.8` | Áudio preservado antes da confirmação de voz; aceita valores positivos até 2 segundos. |
+| `MICROPHONE_DEVICE_INDEX` | dispositivo padrão | Índice da entrada de áudio do host; consulte `--list-microphones`. |
+| `WHISPER_INITIAL_PROMPT` | vazio | Contexto opcional do Whisper no container `realtime`; exige recriar o serviço. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
 
@@ -81,6 +83,31 @@ Defina as variáveis antes de iniciar o aplicativo. Exemplo no PowerShell:
 $env:STREAM_SILENCE_SECONDS = "3"
 .venv\Scripts\python.exe main.py
 ```
+
+Para listar os microfones sem iniciar a captura e selecionar um dispositivo:
+
+```powershell
+.venv\Scripts\python.exe main.py --list-microphones
+$env:MICROPHONE_DEVICE_INDEX = "1" # substitua pelo índice mostrado na sua máquina
+.venv\Scripts\python.exe main.py
+```
+
+Os índices podem mudar quando dispositivos são conectados ou desconectados. Sem essa
+variável, o aplicativo continua usando o microfone padrão do sistema.
+
+O Whisper usa `small`, temperatura zero e beam 5 para a transcrição final. O início
+da fala tem um buffer de 800 ms para preservar sons baixos antes da confirmação do VAD.
+O resultado pode demorar mais do que com `base`; o cliente aguarda até 60 segundos.
+Para comparar o reconhecimento com contexto de comandos, configure antes de recriar
+o serviço (o padrão vazio permite avaliar o modelo sem esse contexto):
+
+```powershell
+$env:WHISPER_INITIAL_PROMPT = "Comandos de computador em português: abra, feche, navegador, bloco de notas."
+docker compose up --build -d realtime
+```
+
+Compare as mesmas gravações com e sem contexto, incluindo frases livres. Para desativá-lo,
+remova a variável e recrie o serviço. Reinicie o aplicativo após alterar opções do host.
 
 Para voltar ao fluxo antigo no PowerShell:
 
@@ -98,16 +125,16 @@ de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
 ### Organização da integração
 
 - `wakeword` possui o único stream do microfone, wake word ONNX e Silero VAD. Envia PCM16
-  mono a 16 kHz em blocos de 80 ms; uma thread de transporte recebe parciais simultaneamente.
+  mono a 16 kHz em blocos de 80 ms; uma thread de transporte aguarda o resultado final.
 - `speakbar` recebe eventos pelo controlador Qt. Captura, modelos e rede ficam fora da
   thread gráfica; as ondas animam apenas durante a captura.
 - `api` encaminha o WebSocket `/transcribe/stream` ao container `realtime` pela rede interna.
-- `worker/realtime.py` carrega uma instância de Whisper **base / CPU / INT8 / 4 threads**,
-  com português, `beam_size=1` e temperatura zero. O processo é separado do Celery.
-- A cada segundo de áudio adicional, o servidor reprocessa o contexto acumulado. Há no
-  máximo uma inferência ativa e uma versão mais recente pendente, limitada a 30 segundos.
-- Uploads manuais e GET `/transcribe/{task_id}/status` permanecem disponíveis. O modelo
-  Whisper do worker Celery, a retenção de uploads e os resultados desses endpoints não mudaram.
+- `worker/realtime.py` carrega uma instância de Whisper **small / CPU / float32 / 4 threads**,
+  com português, `beam_size=5` e temperatura zero. O processo é separado do Celery.
+- O servidor acumula até 30 segundos de áudio em memória e só inicia a inferência ao
+  receber a finalização da captura. Não são geradas transcrições parciais.
+- Uploads manuais e GET `/transcribe/{task_id}/status` permanecem disponíveis. O worker
+  Celery também usa `small`, temperatura zero e beam 5; a retenção e o formato das respostas continuam iguais.
 
 Protocolo de streaming: [docs/streaming.md](docs/streaming.md).
 ## Reconhecimento de voz e modelos
@@ -145,7 +172,7 @@ python main.py --headless
 
 Pare com `Ctrl + C`. Saia da venv com `deactivate`.
 
-Ao detectar a chamada, o serviço inicia a captura contínua com parciais até a pausa.
+Ao detectar a chamada, o serviço captura a fala até a pausa e então solicita a transcrição.
 A conexão com o backend é preparada antes de indicar disponibilidade. Os modelos
 continuam locais: depois dos downloads iniciais, não é necessário enviar áudio a serviços
 externos. `DETECTION_THRESHOLD` define o limiar da wake word (padrão `0.3`).

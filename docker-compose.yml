@@ -40,6 +40,8 @@ services:
 
   realtime:
     build: ./worker
+    environment:
+      WHISPER_INITIAL_PROMPT: ${WHISPER_INITIAL_PROMPT:-}
     command: uvicorn realtime:app --host 0.0.0.0 --port 8001 --ws-max-size 4096 --ws-max-queue 8
     volumes:
       - whisper-cache:/root/.cache/huggingface

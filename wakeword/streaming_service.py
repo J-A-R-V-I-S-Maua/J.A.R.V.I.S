@@ -1,11 +1,12 @@
-"""Captura/VAD no host e transcrição incremental no backend."""
+"""Captura/VAD no host e transcrição da fala completa no backend."""
 from collections import deque
 import logging
+import math
 import time
 
 import numpy as np
 
-from .detect_microphone_service import VoiceService, _read_chunk
+from .detect_microphone_service import CHUNK, RATE, VoiceService, _read_chunk
 from .events import Cancelled, State, check_cancelled
 from .speech_gate import SpeechConfig, SpeechGate
 from .streaming_client import StreamingClient
@@ -30,8 +31,6 @@ class StreamingVoiceService(VoiceService):
         self.speech_config = speech_config
         self.connection = None
         self.vad = None
-        self._partial_text = ""
-        self._finishing = False
 
     def _check_ready(self):
         if self.connection:
@@ -53,24 +52,13 @@ class StreamingVoiceService(VoiceService):
                     raise
                 self.stop_requested.wait(0.25)
 
-    def _partial(self, text, sequence, interaction_id):
-        with self._lock:
-            if interaction_id != self._interaction_id or self.cancel_requested.is_set():
-                return
-            self._partial_text = text
-            state = State.PROCESSING if self._finishing else State.LISTENING
-            self._publish(state, text, interaction_id=interaction_id,
-                          sequence=sequence, is_final=False)
-
     def _stream_audio(self, stream, audio, interaction_id):
-        self._partial_text = ""
-        self._finishing = False
         gate = SpeechGate(self.speech_config)
         self.vad.reset_states()
-        self.connection.begin(interaction_id, lambda text, seq: self._partial(text, seq, interaction_id))
-        prefix = deque(maxlen=3)
+        self.connection.begin(interaction_id)
+        # Preservar sons baixos antes de o VAD confirmar o início da fala.
+        prefix = deque(maxlen=math.ceil(self.speech_config.pre_roll_seconds * RATE / CHUNK))
         sent_speech = False
-        first_send = None
         while True:
             check_cancelled(self.cancel_requested.is_set)
             self.connection.check()
@@ -81,23 +69,17 @@ class StreamingVoiceService(VoiceService):
                 prefix.append(chunk)
                 if gate.has_speech:
                     sent_speech = True
-                    first_send = time.monotonic()
                     for buffered in prefix:
                         self.connection.send_audio(buffered)
                     prefix.clear()
             else:
                 self.connection.send_audio(chunk)
-            if first_send is not None:
-                last = max(first_send, self.connection.last_response)
-                if time.monotonic() - last > 15:
-                    raise TranscriptionError("O reconhecimento está demorando demais. Tente novamente.")
             if outcome == "no_speech":
                 raise NoSpeech("Nenhuma fala reconhecida. Diga hey jarvis ou clique para tentar novamente.")
             if outcome == "finish":
                 with self._lock:
-                    self._finishing = True
-                    self._publish(State.PROCESSING, self._partial_text or "Finalizando transcrição…",
-                                  interaction_id=interaction_id)
+                    check_cancelled(self.cancel_requested.is_set)
+                    self._publish(State.PROCESSING, interaction_id=interaction_id)
                 return None
 
     def run(self):
@@ -130,7 +112,7 @@ class StreamingVoiceService(VoiceService):
                     if self.stop_requested.is_set():
                         break
                     logging.exception("Falha no streaming")
-                    message = str(exc) if isinstance(exc, TranscriptionError) else (
+                    message = str(exc) if isinstance(exc, (TranscriptionError, ValueError)) else (
                         "Falha no microfone ou reconhecimento. Verifique o dispositivo e tente novamente.")
                     self._publish(State.ERROR, message)
                     if self.connection:

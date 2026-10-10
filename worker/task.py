@@ -26,7 +26,8 @@ def _run_transcription(path: str, language: str):
         language = language,
         vad_filter = True,
         condition_on_previous_text=False,
-        temperature= 0.2
+        temperature=0.0,
+        beam_size=5,
     )
 
     return[

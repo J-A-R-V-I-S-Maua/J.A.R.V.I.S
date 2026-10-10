@@ -1,4 +1,4 @@
-"""Transporte simultâneo de áudio e hipóteses, sem bloquear a captura."""
+"""Transporta áudio durante a captura e recebe apenas a transcrição final."""
 import asyncio
 import json
 import os
@@ -12,7 +12,7 @@ from websockets.asyncio.client import connect
 from .events import check_cancelled
 from .transcription_client import Transcript, TranscriptionError
 
-FINAL_TIMEOUT_SECONDS = 20
+FINAL_TIMEOUT_SECONDS = 60  # O modelo small com beam search leva mais tempo em CPU.
 
 
 class StreamingClient:
@@ -29,8 +29,6 @@ class StreamingClient:
         self.result = None
         self.interaction_id = None
         self.sequence = 0
-        self.on_partial = lambda text, sequence: None
-        self.last_response = time.monotonic()
 
     def prepare(self, cancelled):
         self.thread = threading.Thread(target=self._run, name="speech-websocket")
@@ -99,10 +97,8 @@ class StreamingClient:
                         if sequence <= self.sequence or self.closing.is_set():
                             continue
                         self.sequence = sequence
-                        self.last_response = time.monotonic()
-                        if kind == "partial":
-                            self.on_partial(text, sequence)
-                        else:
+                        # Ignorar parciais de backends antigos durante uma atualização.
+                        if kind == "final":
                             self.result = Transcript(text, self.interaction_id)
                             self.completed.set()
                             return
@@ -142,9 +138,8 @@ class StreamingClient:
         except queue.Full as exc:
             raise TranscriptionError("O envio do áudio atrasou. Tente novamente.") from exc
 
-    def begin(self, interaction_id, on_partial):
+    def begin(self, interaction_id):
         self.interaction_id = str(interaction_id)
-        self.on_partial = on_partial
         self._enqueue(json.dumps({"type": "start", "interaction_id": self.interaction_id,
                                   "sample_rate": 16000, "channels": 1, "format": "pcm_s16le"}))
 

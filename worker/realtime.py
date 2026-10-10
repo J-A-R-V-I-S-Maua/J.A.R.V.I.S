@@ -1,9 +1,10 @@
-"""Serviço WebSocket de baixa latência, separado das tarefas Celery."""
+"""Serviço WebSocket de transcrição após a fala, separado das tarefas Celery."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import json
 import logging
+import os
 from pathlib import Path
 import time
 
@@ -15,11 +16,20 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 
 from streaming_engine import StreamingSession
 
+MODEL_NAME = "small"
+INITIAL_PROMPT = os.getenv("WHISPER_INITIAL_PROMPT", "").strip() or None
+
+
+def transcription_options():
+    return dict(language="pt", beam_size=5, temperature=0.0,
+                condition_on_previous_text=False, without_timestamps=True,
+                vad_filter=True, initial_prompt=INITIAL_PROMPT)
+
 
 def load_model():
     # Revisão oficial fixa; reutilizar cache sem consultar a listagem remota a cada boot.
-    repo = "Systran/faster-whisper-base"
-    revision = "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
+    repo = "Systran/faster-whisper-small"
+    revision = "536b0662742c02347bc0e980a01041f333bce120"
     directory = None
     for filename in ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"):
         try:
@@ -29,8 +39,7 @@ def load_model():
         directory = str(Path(path).parent)
     model = WhisperModel(directory, device="cpu", compute_type="float32", cpu_threads=4, num_workers=2)
     # Aquecimento antes de aceitar conexões.
-    list(model.transcribe(np.zeros(16000, dtype=np.float32), language="pt", beam_size=1,
-                          temperature=0.2, vad_filter=True, condition_on_previous_text=False)[0])
+    list(model.transcribe(np.zeros(16000, dtype=np.float32), **transcription_options())[0])
     return model
 
 
@@ -49,7 +58,8 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    return {"ready": True, "model": "base", "compute_type": "float32"}
+    return {"ready": True, "model": MODEL_NAME, "compute_type": "float32",
+            "beam_size": 5, "temperature": 0.0, "prompt_enabled": INITIAL_PROMPT is not None}
 
 
 @app.websocket("/transcribe/stream")
@@ -66,9 +76,7 @@ async def transcribe_stream(socket: WebSocket):
                 began = time.monotonic()
                 samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
                 segments, _ = app.state.model.transcribe(
-                    samples, language="pt", beam_size=1, temperature=0.2,
-                    condition_on_previous_text=False, without_timestamps=True,
-                    vad_filter=True,
+                    samples, **transcription_options(),
                 )
                 text = " ".join(" ".join(segment.text for segment in segments).split())
                 logging.getLogger("uvicorn.error").info(

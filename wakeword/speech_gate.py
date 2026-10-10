@@ -8,17 +8,21 @@ class SpeechConfig:
     silence_seconds: float = 2.0
     start_timeout: float = 10.0
     max_seconds: float = 30.0
+    pre_roll_seconds: float = 0.8
 
     def __post_init__(self):
         if not (0 < self.silence_seconds <= 30 and 0 < self.start_timeout <= 30
                 and 0 < self.max_seconds <= 30):
             raise ValueError("Os tempos de streaming devem estar entre 0 e 30 segundos.")
+        if not 0 < self.pre_roll_seconds <= 2:
+            raise ValueError("STREAM_PRE_ROLL_SECONDS deve ser positivo e no máximo 2 segundos.")
 
     @classmethod
     def from_environment(cls):
         return cls(float(os.getenv("STREAM_SILENCE_SECONDS", "2")),
                    float(os.getenv("STREAM_START_TIMEOUT_SECONDS", "10")),
-                   float(os.getenv("STREAM_MAX_SECONDS", "30")))
+                   float(os.getenv("STREAM_MAX_SECONDS", "30")),
+                   float(os.getenv("STREAM_PRE_ROLL_SECONDS", "0.8")))
 
 
 class SpeechGate:

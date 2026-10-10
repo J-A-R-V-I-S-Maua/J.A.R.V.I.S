@@ -9,6 +9,7 @@ import time
 import wave
 
 from .events import Cancelled, State, VoiceEvent, check_cancelled
+from .microphone import select_input_device
 from .transcription_client import TranscriptionClient, TranscriptionError
 
 RATE = 16000
@@ -127,7 +128,8 @@ class VoiceService:
             audio = self.audio_factory()
             resources.callback(audio.terminate)
             stream = audio.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE,
-                                input=True, frames_per_buffer=CHUNK)
+                                input=True, frames_per_buffer=CHUNK,
+                                input_device_index=select_input_device(audio))
             resources.callback(stream.close)
             resources.callback(stream.stop_stream)
             model.reset()
@@ -182,9 +184,10 @@ class VoiceService:
                         break
                     self._publish(State.IDLE)
                     continue
-                except Exception:
+                except Exception as exc:
                     logging.exception("Falha na captura de áudio")
-                    self._publish(State.ERROR, "Microfone indisponível. Verifique o dispositivo e clique para tentar novamente.")
+                    self._publish(State.ERROR, str(exc) if isinstance(exc, ValueError) else
+                                  "Microfone indisponível. Verifique o dispositivo e clique para tentar novamente.")
                     self._wait_for_retry()
                     self._publish(State.PREPARING)
                     continue
