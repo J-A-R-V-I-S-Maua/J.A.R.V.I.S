@@ -132,6 +132,7 @@ class Speakbar(QWidget):
         self.setWindowTitle("J.A.R.V.I.S. — Speakbar" + (" (demonstração)" if demo else ""))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowIcon(make_icon())
         self._drag_offset = None
         self.controller = controller or (DemoController(self) if demo else VoiceController(self))
@@ -161,6 +162,11 @@ class Speakbar(QWidget):
         self.close_button.clicked.connect(self.close)
         self.controller.state_changed.connect(self._render_state)
         self.controller.stopped.connect(self._finish_quit)
+        self.overlay = None
+        if hasattr(self.controller, "markers_changed"):
+            from .overlay import NumberOverlay
+            self.overlay = NumberOverlay()
+            self.controller.markers_changed.connect(self.overlay.show_elements)
         self._render_state(self.controller.current_event)
 
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
@@ -197,6 +203,8 @@ class Speakbar(QWidget):
         self.message.setAccessibleDescription(event.text)
         self.message.setToolTip(event.text)
         active = event.state in (State.LISTENING, State.PROCESSING)
+        if hasattr(self.controller, "screen"):
+            active = active or self.controller.screen.session.active
         name = "Cancelar interação" if active else "Gravar comando"
         if event.state is State.ERROR:
             name = "Tentar novamente"
@@ -317,6 +325,8 @@ class Speakbar(QWidget):
         if self._closing:
             return
         self._closing = True
+        if self.overlay:
+            self.overlay.clear()
         self.close_button.setEnabled(False)
         self.controller.shutdown()
 

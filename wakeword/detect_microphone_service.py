@@ -89,6 +89,23 @@ class VoiceService:
             self._snapshot = event
             self.on_event(event)
 
+    def request_capture(self):
+        """Solicita uma captura sem alternar ou cancelar uma operação em andamento."""
+        with self._lock:
+            if self.stop_requested.is_set() or self._snapshot.state in (
+                    State.LISTENING, State.PROCESSING, State.CANCELLING, State.STOPPING, State.STOPPED):
+                return False
+            self.trigger_requested.set()
+            return True
+
+    def cancel_interaction(self):
+        with self._lock:
+            self.trigger_requested.clear()
+            if self._snapshot.state in (State.LISTENING, State.PROCESSING):
+                self._interaction_id += 1
+                self.cancel_requested.set()
+                self._publish(State.CANCELLING)
+
     def toggle(self):
         """Chamável por outra thread; nunca acessa o dispositivo ou o modelo."""
         with self._lock:

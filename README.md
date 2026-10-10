@@ -41,7 +41,8 @@ A demonstração `--demo` continua funcionando sem Docker.
 
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
 ou uploads gravados no servidor. As gravações anteriores são preservadas.
-Não há execução de comandos por IA ou confirmação por voz nesta etapa.
+Controles da janela atual podem ser acionados após confirmação por voz, usando as APIs
+de acessibilidade do Windows/macOS. A interpretação por LLM continua fora desta etapa.
 A aparência preserva transparência e gradiente, sem desfoque nativo.
 
 ### Modos de execução
@@ -60,6 +61,155 @@ basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
 `wakeword/requirements.txt`. O requirements da raiz referencia ambos, sem duplicá-los.
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
+
+### Acesso à tela integrado à speakbar
+
+O acesso à tela roda no host. As dependências estão incluídas no requirements da raiz;
+não é necessário reconstruir os containers para esta integração. No PowerShell:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe main.py
+```
+
+Feche a instância antiga da barra antes de iniciar a atualizada. Mantenha o aplicativo
+que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da barra):
+
+- **“Mostrar números”**: exibe marcadores sobre os controles e abre outra captura
+  automaticamente. Responda **“sete”**, **“número sete”** ou **“clique no número sete”**.
+- **“Clique em pesquisar”**: compara o nome com os controles da janela. Se houver
+  vários candidatos, mostra seus números e pede uma escolha.
+- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows):
+  solicita a abertura padrão de um item ou atalho pela ação nativa `Invoke`.
+  A abertura é solicitada uma única vez. Itens sem essa ação informam indisponibilidade.
+- **“Abrir menu de contexto da Lixeira”** (Windows): equivalente ao botão direito.
+  Também aceita **“clique com o botão direito no número sete”**. A barra identifica
+  o controle e pede confirmação; então devolve o foco e envia **Shift+F10**, o
+  [atalho do Windows para o menu de contexto](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu).
+  O aplicativo precisa oferecer o menu para esse controle. A ação não escolhe
+  automaticamente nenhuma opção do menu.
+- Depois da escolha, a barra mostra **“Acionar [nome]? Diga confirmar ou cancelar”**
+  e abre outra captura. Diga **“confirmar”** ou **“sim”** para acionar; **“cancelar”**,
+  **“não”** ou **“parar”** para abandonar a proposta. Não é necessário repetir a wake word.
+- **“Esconder números”** remove os marcadores. O botão da barra também cancela uma
+  sessão pendente. Cada escolha exige sua própria confirmação.
+- **“Digitar olá, mundo”** (Windows): dê foco ao campo desejado e fale o comando.
+  A barra mostra o texto reconhecido e pede **“confirmar”** antes de inseri-lo.
+- **“Digitar”** (Windows): a barra abre uma captura para o texto e, em seguida,
+  outra para confirmação. Não é necessário repetir a wake word nessas respostas.
+  O campo pode ter sido selecionado diretamente ou com **“clique em pesquisar”**.
+- **“Enter”** (Windows): pede confirmação e envia Enter ao campo de texto ativo.
+  Em campos de pesquisa, executa o comportamento de pesquisa do aplicativo; em
+  editores de várias linhas, pode inserir uma nova linha. Também aceita **“pressionar enter”**.
+- **“Deletar”** (Windows): pede confirmação e apaga **todo o conteúdo do campo ativo**,
+  incluindo texto que já existia antes da última ditagem. Também aceita **“limpar campo”**
+  e **“apagar tudo”**. Sem campo editável ativo, solicita que você selecione um.
+
+As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
+recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens
+selecionáveis usam ações nativas, sem fallback de clique por coordenadas.
+
+“Digitar” insere a transcrição final no cursor ou substitui a seleção atual, preservando
+o restante do campo. Acentos, caixa e pontuação seguem a transcrição; não há correção
+ou interpretação por LLM. O texto é enviado como Unicode literal, sem usar a área de
+transferência ou interpretar palavras como atalhos. Não pressiona Enter nem envia
+formulários. Mudança de campo ou perda de foco interrompe o envio; confira qualquer
+texto já inserido antes de repetir. Sem campo editável ativo, a barra pede para selecionar um.
+
+Para pesquisar por voz: selecione o campo, diga **“digitar previsão do tempo”** e
+**“confirmar”**; depois inicie uma nova captura pelo botão ou **“hey jarvis”**, diga
+**“Enter”** e confirme. Para limpar a busca, diga **“Deletar”** e confirme. Esses
+comandos preservam o campo externo quando a speakbar recebe foco e revalidam o alvo
+antes da ação. Durante a captura do texto de “digitar”, Enter e Deletar são tratados
+como palavras a inserir. A limpeza usa `ValuePattern.SetValue("")` quando disponível,
+ou Ctrl+A e Backspace no editor validado quando só há suporte de texto.
+
+O alvo é a última janela externa em foco, preservada quando o botão da speakbar recebe
+foco. No Windows, eventos de mudança de foco são acompanhados na thread do backend,
+incluindo transições rápidas antes do clique na barra, usando
+[SetWinEventHook](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwineventhook).
+Trocar de janela ou alterar a posição, o nome ou a disponibilidade de um alvo
+invalida a sessão. Os controles marcados são revalidados periodicamente e antes da ação.
+Não há nova tentativa automática de uma ação; um pedido já iniciado no aplicativo não
+pode ser desfeito pelo cancelamento. Ausência de fala ou resposta inválida cancela a proposta.
+
+A lista usa profundidade **32** e até **3000 elementos visitados** por padrão, para
+alcançar controles de páginas web aninhadas. O limite de tempo de leitura é 5 segundos;
+quando um limite é atingido ou um ramo está inacessível, a barra informa que a lista é
+parcial. Para aplicativos com árvores
+maiores, ajuste antes de iniciar o host:
+
+```powershell
+$env:SCREEN_MAX_DEPTH = "48"
+$env:SCREEN_MAX_ELEMENTS = "5000"
+.venv\Scripts\python.exe main.py
+```
+
+`SCREEN_MAX_DEPTH` aceita inteiros >= 0; `SCREEN_MAX_ELEMENTS`, de 1 a 10000. São
+numerados no máximo 200 controles por leitura. A sessão expira após 30 segundos sem
+concluir a etapa; pedidos em execução têm limite de espera de 90 segundos. Uma chamada
+nativa lenta não bloqueia a interface, mas pode terminar no aplicativo depois de expirar.
+
+No Windows, a integração utiliza UI Automation (`uiautomation`). Aplicativos que não
+expõem controles ou que executam com privilégios diferentes podem recusar acesso.
+Nesses casos, a barra informa a falha e o reconhecimento de voz continua disponível.
+Na área de trabalho, a leitura resolve o host dos ícones (`Progman`/`WorkerW`), em vez
+de ler apenas a janela do papel de parede, e inclui a barra de tarefas principal e
+as barras de outros monitores. Lixeira, atalhos, Iniciar e controles visíveis da
+barra de tarefas compartilham a mesma numeração. Os retângulos são tratados
+separadamente para cada host; controles de outro monitor não são cortados pelo
+retângulo do desktop principal. A passagem entre o fundo, os ícones e a barra de
+tarefas preserva a sessão; entrar em outra janela de aplicativo a invalida.
+
+Para controlar a área de trabalho, use **Win+D**, clique numa região vazia dela e
+diga **“mostrar números”**. Também pode usar o botão da speakbar: o aplicativo
+minimizado anteriormente deixa de ser usado como alvo. Depois diga o número,
+**“confirmar”** para executar ou **“cancelar”** para abandonar a proposta. O botão
+Iniciar pode ser escolhido diretamente com **“clique em iniciar”** enquanto o alvo
+é o desktop. Ícones usam seleção nativa no clique simples; para abrir o atalho,
+diga **“clique duas vezes em [nome ou número]”**, seguido de **“confirmar”**.
+Para suas opções, diga **“abrir menu de contexto de [nome ou número]”** e confirme.
+Elementos ocultos, inclusive de barras de tarefas recolhidas, não recebem marcadores.
+
+Em navegadores, são listados controles
+acionáveis da página expostos por acessibilidade, além dos controles do navegador.
+Textos, imagens sem ação e conteúdo fora da área visível não recebem números.
+Se um navegador Chromium continuar expondo apenas sua interface, verifique o suporte
+de acessibilidade da página: o Chrome permite ativá-lo em `chrome://accessibility` ou
+ao iniciar com `--force-renderer-accessibility`, conforme a
+[documentação do Chromium](https://www.chromium.org/developers/design-documents/accessibility/).
+Não é necessário esse ajuste para páginas que já expõem os controles. Variáveis
+`SCREEN_MAX_*` configuradas anteriormente continuam prevalecendo sobre os novos padrões.
+No macOS, autorize Acessibilidade para o aplicativo que executa o Python. O Linux
+mantém a transcrição, mas o acesso à tela não está implementado.
+
+Para inspecionar a janela sem microfone, use o módulo independente:
+
+```powershell
+.venv\Scripts\python.exe -m screen_access --delay 5 --clickable --show-frames
+.venv\Scripts\python.exe -m screen_access --delay 5 --press
+```
+
+O segundo comando recebe a escolha e a confirmação pelo terminal; realiza no máximo
+uma ação. Também estão disponíveis `--max-depth`, `--max-elements` e `--include-hidden`.
+Elementos ocultos podem ser inspecionados, mas a validação impede acioná-los enquanto ocultos.
+
+Validação automatizada e verificação nativa isolada no Windows:
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+.venv\Scripts\python.exe tests/screen_native_check.py
+```
+
+A verificação nativa abre uma janela descartável e valida Invoke, Toggle, foco,
+SelectionItem, menu de contexto, Enter, limpeza de campo e digitação Unicode literal preservando texto existente
+após confirmação. A abertura de itens é verificada com padrões simulados; a leitura
+nativa confirma a disponibilidade de `Invoke` nos ícones do desktop sem abri-los.
+Os testes também cobrem o contrato macOS com APIs
+simuladas e coordenadas em 100%, 125%, 150% e monitores com origem negativa.
+A validação nativa macOS exige uma máquina macOS. Para validar com sua voz, repita o
+fluxo de mostrar números, escolher, confirmar e cancelar em Chrome/Edge, Explorer e
+Bloco de Notas; verifique especialmente nomes duplicados e mudança de janela durante a confirmação.
 
 ### Configuração e modo anterior
 
