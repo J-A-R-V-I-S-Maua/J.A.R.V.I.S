@@ -1,2 +1,3 @@
 -r wakeword/requirements.txt
 -r speakbar/requirements.txt
+-r screen_access/requirements.txt
