@@ -211,6 +211,59 @@ A validação nativa macOS exige uma máquina macOS. Para validar com sua voz, r
 fluxo de mostrar números, escolher, confirmar e cancelar em Chrome/Edge, Explorer e
 Bloco de Notas; verifique especialmente nomes duplicados e mudança de janela durante a confirmação.
 
+## Configurações e atalhos personalizados
+
+Abra pela engrenagem da speakbar, pelo menu do ícone da bandeja ou com:
+**“Hey Jarvis” → “Abra as configurações”**. Também aceita “abrir configurações” e
+“abra as configurações do Jarvis”. Esse comando abre o menu do J.A.R.V.I.S.; as
+configurações do Windows são um destino separado no cadastro de atalhos.
+
+O menu tem quatro seções: **Atalhos**, **Voz e microfone**, **Aparência e acessibilidade**
+e **Ajuda e diagnóstico**. Enquanto estiver aberto, o reconhecimento de comandos
+fica pausado e propostas anteriores são canceladas. Fechar ou cancelar retoma a voz.
+Uma segunda abertura traz a mesma janela para frente.
+
+Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site,
+aplicativo `.exe` ou atalho `.lnk`, pasta ou recurso do Windows (Explorador,
+Configurações, Rede ou Som). Os exemplos apenas preenchem o formulário; clique em
+**Salvar** para cadastrar. **Adicionar / atualizar** permite organizar vários
+cadastros antes de salvar. **Cancelar** descarta o rascunho. **Testar abertura** abre
+explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocorre.
+
+Exemplo: nome **YouTube**, frase **abrir YouTube**, ação **Site**, destino **youtube.com**.
+Depois diga **“executar atalho abrir YouTube”**, ou **“executar atalho”** e responda
+**“abrir YouTube”** na captura automática seguinte. Os atalhos executam diretamente,
+sem confirmação adicional. Os comandos existentes de controle da tela continuam
+exigindo confirmação. A comparação das frases ignora acentos, pontuação, caixa e
+espaços extras, mas não adivinha uma frase diferente. Frases repetidas ou reservadas,
+como “cancelar”, “confirmar” e “abra as configurações”, são recusadas.
+
+Na seção de voz, selecione o dispositivo e salve antes de testar um microfone diferente.
+**Testar captação** exibe o nível por cinco segundos. **Testar transcrição** mostra a
+frase reconhecida sem executar nenhum comando, mesmo “Deletar”. Os testes usam a
+thread que já possui o áudio; não abrem uma captura concorrente. A listagem de
+dispositivos não cria outra instância do PortAudio na interface: a lista
+é consultada na thread de áudio e enviada ao menu de forma assíncrona. A verificação
+de regressão no Windows, com captura real e sem Whisper ou gravações, pode ser executada com
+`.venv\Scripts\python.exe -X faulthandler tests/settings_native_check.py`.
+O menu também permite ajustar os tempos de captura e o limiar da wake word. Limiar menor facilita ativação,
+mas pode aumentar chamadas acidentais. Microfones ausentes ou ambíguos exigem nova seleção.
+
+Preferências e atalhos são gravados em `settings.json`, no diretório de configurações
+do usuário indicado pelo Qt (no Windows, normalmente
+`%LOCALAPPDATA%\J.A.R.V.I.S. Speakbar`). Campos personalizados prevalecem sobre o
+ambiente; os demais continuam usando seus valores atuais. A gravação é atômica.
+Arquivos inválidos são informados e preservados; ao salvar uma substituição, uma
+cópia `settings.invalid-*.json` é mantida. **Restaurar preferências** remove as
+personalizações ao salvar e preserva os atalhos. O menu não mantém histórico de áudio
+ou transcrições; o teste em modo batch remove seu áudio temporário após processamento.
+
+Salvar aplica a aparência e os limites de tela. Mudanças de áudio reiniciam apenas o
+serviço de voz, após liberar o dispositivo. Ao sair, a posição da barra é salva quando
+a opção está ativada, e ajustada para um monitor disponível na próxima abertura.
+O modo headless continua usando o ambiente. Containers e configuração do Whisper
+não são alterados. Os destinos locais e o catálogo do sistema são priorizados para Windows.
+
 ### Configuração e modo anterior
 
 | Variável | Padrão | Efeito |

@@ -61,11 +61,22 @@ def record_audio(seconds, *, mic_stream, audio_interface, cancelled=lambda: Fals
 
 class VoiceService:
     def __init__(self, on_event=lambda event: None, *, model_factory=_create_model,
-                 audio_factory=_create_audio, client_factory=TranscriptionClient):
+                 audio_factory=_create_audio, client_factory=TranscriptionClient,
+                 input_device="environment", detection_threshold=DETECTION_THRESHOLD, on_level=lambda level: None,
+                 on_devices=lambda devices: None):
         self.on_event = on_event
         self.model_factory = model_factory
         self.audio_factory = audio_factory
         self.client_factory = client_factory
+        self.input_device = input_device
+        self.detection_threshold = detection_threshold
+        self.on_level = on_level
+        self.on_devices = on_devices
+        self.devices_requested = threading.Event()
+        self.paused = threading.Event()
+        self.diagnostic_capture = threading.Event()
+        self.audio_test_until = 0
+        self.current_diagnostic = False
         self.stop_requested = threading.Event()
         self.cancel_requested = threading.Event()
         self.trigger_requested = threading.Event()
@@ -89,13 +100,61 @@ class VoiceService:
             self._snapshot = event
             self.on_event(event)
 
-    def request_capture(self):
+    def set_paused(self, paused):
+        with self._lock:
+            self.cancel_interaction()
+            self.diagnostic_capture.clear()
+            self.audio_test_until = 0
+            if paused:
+                self.paused.set()
+            else:
+                self.paused.clear()
+
+    def request_audio_test(self):
+        self.audio_test_until = time.monotonic() + 5
+        # Permite recuperar um serviço em ERROR sem executar comandos.
+        if self.snapshot.state is State.ERROR:
+            self.trigger_requested.set()
+
+    def request_device_list(self):
+        """A UI solicita dados; somente a thread de áudio consulta o PortAudio."""
+        self.devices_requested.set()
+        if self.snapshot.state is State.ERROR:
+            self.trigger_requested.set()
+
+    def _publish_devices(self, audio):
+        from .microphone import input_devices
+        self.devices_requested.clear()
+        try:
+            result = dict(devices=input_devices(audio), error=None)
+        except Exception as exc:
+            result = dict(devices=[], error=f"Não foi possível listar os microfones: {exc}")
+        self.on_devices(result)
+
+    def _enumerate_devices(self):
+        # Chamado no loop antes de abrir uma captura, inclusive sem conexão ao backend.
+        self.devices_requested.clear()
+        audio = None
+        try:
+            audio = self.audio_factory()
+            self._publish_devices(audio)
+        except Exception as exc:
+            self.on_devices(dict(devices=[], error=f"Não foi possível listar os microfones: {exc}"))
+        finally:
+            if audio is not None:
+                audio.terminate()
+
+    def request_capture(self, diagnostic=False):
         """Solicita uma captura sem alternar ou cancelar uma operação em andamento."""
         with self._lock:
+            if self.paused.is_set() and not diagnostic:
+                return False
             if self.stop_requested.is_set() or self._snapshot.state in (
                     State.LISTENING, State.PROCESSING, State.CANCELLING, State.STOPPING, State.STOPPED):
                 return False
             self.trigger_requested.set()
+            if diagnostic:
+                self.diagnostic_capture.set()
             return True
 
     def cancel_interaction(self):
@@ -109,6 +168,8 @@ class VoiceService:
     def toggle(self):
         """Chamável por outra thread; nunca acessa o dispositivo ou o modelo."""
         with self._lock:
+            if self.paused.is_set():
+                return
             state = self._snapshot.state
             if state in (State.LISTENING, State.PROCESSING):
                 self._interaction_id += 1
@@ -137,6 +198,24 @@ class VoiceService:
     def _check_ready(self):
         pass
 
+    def _meter_only(self):
+        """Teste sem conexão com o Whisper, sempre na thread dona do áudio."""
+        import numpy as np
+        import pyaudio
+        with ExitStack() as resources:
+            audio = self.audio_factory()
+            resources.callback(audio.terminate)
+            self._publish_devices(audio)
+            stream = audio.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE, input=True,
+                                frames_per_buffer=CHUNK, input_device_index=select_input_device(audio, self.input_device))
+            resources.callback(stream.close)
+            resources.callback(stream.stop_stream)
+            while self.paused.is_set() and time.monotonic() < self.audio_test_until:
+                check_cancelled(self.stop_requested.is_set)
+                chunk = _read_chunk(stream, self.stop_requested.is_set)
+                samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+                self.on_level(min(100, int(float(np.sqrt(np.mean(samples * samples))) / 32768 * 500)))
+
     def _capture(self, model, capture=None):
         import numpy as np
         import pyaudio
@@ -144,9 +223,10 @@ class VoiceService:
             check_cancelled(self.stop_requested.is_set)
             audio = self.audio_factory()
             resources.callback(audio.terminate)
+            self._publish_devices(audio)
             stream = audio.open(format=pyaudio.paInt16, channels=CHANNELS, rate=RATE,
                                 input=True, frames_per_buffer=CHUNK,
-                                input_device_index=select_input_device(audio))
+                                input_device_index=select_input_device(audio, self.input_device))
             resources.callback(stream.close)
             resources.callback(stream.stop_stream)
             model.reset()
@@ -154,16 +234,29 @@ class VoiceService:
                 self._publish(State.IDLE)
             while True:
                 check_cancelled(self.stop_requested.is_set)
+                if self.devices_requested.is_set():
+                    self._publish_devices(audio)
                 self._check_ready()
-                manual = self.trigger_requested.is_set()
+                manual = self.trigger_requested.is_set() or self.diagnostic_capture.is_set()
+                if self.paused.is_set() and not (manual and self.diagnostic_capture.is_set()):
+                    chunk = _read_chunk(stream, self.stop_requested.is_set)
+                    if time.monotonic() < self.audio_test_until:
+                        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+                        level = min(100, int(float(np.sqrt(np.mean(samples * samples))) / 32768 * 500))
+                        self.on_level(level)
+                    continue
                 if not manual:
                     chunk = _read_chunk(stream, self.stop_requested.is_set)
                     prediction = model.predict(np.frombuffer(chunk, dtype=np.int16), timing=False)
-                    if prediction.get("hey_jarvis", 0) < DETECTION_THRESHOLD:
+                    if prediction.get("hey_jarvis", 0) < self.detection_threshold:
                         continue
                 with self._lock:
                     check_cancelled(self.stop_requested.is_set)
+                    if self.paused.is_set() and not self.diagnostic_capture.is_set():
+                        continue
                     self.trigger_requested.clear()
+                    self.current_diagnostic = self.diagnostic_capture.is_set()
+                    self.diagnostic_capture.clear()
                     self.cancel_requested.clear()
                     self._interaction_id += 1
                     interaction_id = self._interaction_id
@@ -181,6 +274,18 @@ class VoiceService:
         try:
             client = self.client_factory()
             while not self.stop_requested.is_set():
+                if self.devices_requested.is_set():
+                    self._enumerate_devices()
+                if self.paused.is_set() and time.monotonic() < self.audio_test_until:
+                    try:
+                        self._meter_only()
+                    except Cancelled:
+                        break
+                    except Exception as exc:
+                        self.audio_test_until = 0
+                        self._publish(State.ERROR, f"Microfone indisponível: {exc}")
+                        self._wait_for_retry()
+                    continue
                 if model is None:
                     self._publish(State.PREPARING)
                     try:
@@ -226,6 +331,12 @@ class VoiceService:
                     logging.warning("Falha de transcrição: %s", exc)
                     message = str(exc) if isinstance(exc, TranscriptionError) else "Não foi possível ler o áudio. Tente novamente."
                     self._publish(State.ERROR, message, interaction_id=interaction_id)
+                finally:
+                    if self.current_diagnostic:
+                        try:
+                            Path(path).unlink(missing_ok=True)
+                        except OSError:
+                            logging.exception("Não foi possível remover o áudio temporário de diagnóstico")
         except KeyboardInterrupt:
             self.stop()
         finally:
@@ -234,13 +345,13 @@ class VoiceService:
             self._publish(State.STOPPED)
 
 
-def create_service(on_event=lambda event: None):
+def create_service(on_event=lambda event: None, **kwargs):
     mode = os.getenv("TRANSCRIPTION_MODE", "stream").lower()
     if mode == "batch":
-        return VoiceService(on_event)
+        return VoiceService(on_event, **kwargs)
     if mode == "stream":
         from .streaming_service import StreamingVoiceService
-        return StreamingVoiceService(on_event)
+        return StreamingVoiceService(on_event, **kwargs)
     raise ValueError("TRANSCRIPTION_MODE deve ser stream ou batch")
 
 

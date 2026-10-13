@@ -3,7 +3,33 @@ import logging
 import os
 
 
-def select_input_device(audio):
+def input_devices(audio=None):
+    owned = audio is None
+    if owned:
+        import pyaudio
+        audio = pyaudio.PyAudio()
+    try:
+        return [dict(index=index, name=device["name"], api=audio.get_host_api_info_by_index(device["hostApi"])["name"])
+                for index in range(audio.get_device_count())
+                if (device := audio.get_device_info_by_index(index))["maxInputChannels"] > 0]
+    finally:
+        if owned:
+            audio.terminate()
+
+
+def select_input_device(audio, selection="environment"):
+    if selection != "environment":
+        if selection is None:
+            index = int(audio.get_default_input_device_info()["index"])
+        else:
+            matches = [device for device in input_devices(audio)
+                       if device["name"] == selection["name"] and device["api"] == selection["api"]]
+            if len(matches) != 1:
+                raise ValueError("Microfone ausente ou ambíguo. Selecione novamente nas configurações.")
+            index = matches[0]["index"]
+        if audio.get_device_info_by_index(index)["maxInputChannels"] < 1:
+            raise ValueError("O dispositivo não possui entrada de áudio.")
+        return index
     configured = os.getenv("MICROPHONE_DEVICE_INDEX", "").strip()
     if configured:
         try:

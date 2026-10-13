@@ -113,6 +113,15 @@ class CircleButton(QPushButton):
         painter.drawEllipse(QRectF(1, 1, 48, 48))
         if self.kind == "voice":
             draw_wave(painter, QPoint(25, 25), self.phase, self.listening)
+        elif self.kind == "settings":
+            painter.setPen(QPen(QColor("#111111"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QRectF(16, 16, 18, 18))
+            painter.drawEllipse(QRectF(22, 22, 6, 6))
+            for index in range(8):
+                angle = index * math.pi / 4
+                painter.drawLine(QPoint(round(25 + 10 * math.cos(angle)), round(25 + 10 * math.sin(angle))),
+                                 QPoint(round(25 + 14 * math.cos(angle)), round(25 + 14 * math.sin(angle))))
         else:
             painter.setPen(QPen(QColor("#111111"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawLine(17, 17, 33, 33)
@@ -136,7 +145,15 @@ class Speakbar(QWidget):
         self.setWindowIcon(make_icon())
         self._drag_offset = None
         self.controller = controller or (DemoController(self) if demo else VoiceController(self))
+        self._settings_dialog = None
+        self.preferences = self.controller.preferences
+        self.high_contrast = self.preferences.effective["high_contrast"]
         self.voice = CircleButton("voice", self)
+        self.settings_button = CircleButton("settings", self)
+        self.settings_button.setAccessibleName("Abrir configurações do Jarvis")
+        self.settings_button.setToolTip("Configurações — diga Abra as configurações")
+        self.settings_button.clicked.connect(self.open_settings)
+        self.controller.settings_requested.connect(self.open_settings)
         self.close_button = CircleButton("close", self)
         self.close_button.setAccessibleName("Fechar aplicação")
         self.close_button.setToolTip("Fechar aplicação (Alt+F4)")
@@ -155,8 +172,10 @@ class Speakbar(QWidget):
         layout.setSpacing(12)
         layout.addWidget(self.voice)
         layout.addWidget(self.message, 1)
+        layout.addWidget(self.settings_button)
         layout.addWidget(self.close_button)
-        self.setTabOrder(self.voice, self.close_button)
+        self.setTabOrder(self.voice, self.settings_button)
+        self.setTabOrder(self.settings_button, self.close_button)
         self.setTabOrder(self.close_button, self.message)
         self.voice.clicked.connect(self.controller.toggle)
         self.close_button.clicked.connect(self.close)
@@ -173,6 +192,7 @@ class Speakbar(QWidget):
         self.tray.setToolTip(self.windowTitle())
         self.tray_menu = QMenu()
         self.tray_menu.addAction("Mostrar barra", self.restore)
+        self.tray_menu.addAction("Configurações", self.open_settings)
         self.tray_menu.addSeparator()
         self.tray_menu.addAction("Sair", self.quit)
         self.tray.setContextMenu(self.tray_menu)
@@ -189,6 +209,46 @@ class Speakbar(QWidget):
         self.resize(min(692, area.width()), min(60, area.height()))
         self.move(area.x() + (area.width() - self.width()) // 2,
                   max(area.top(), area.bottom() + 1 - self.height() - 24))
+        self.apply_appearance(self.preferences.effective)
+        values = self.preferences.effective
+        if values["remember_position"] and values["position"]:
+            self.keep_on_screen(QPoint(*values["position"]))
+
+    def open_settings(self):
+        if self._closing:
+            return
+        if self._settings_dialog is not None:
+            self._settings_dialog.show()
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
+        from .settings_window import SettingsWindow
+        self.controller.set_settings_open(True)
+        dialog = SettingsWindow(self.controller, self, demo=self.demo)
+        self._settings_dialog = dialog
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.saved.connect(self.apply_appearance)
+        dialog.finished.connect(self._settings_closed)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _settings_closed(self, result):
+        self._settings_dialog = None
+        if not self._closing:
+            self.controller.set_settings_open(False)
+        self._render_state(self.controller.current_event)
+
+    def apply_appearance(self, values):
+        self.high_contrast = values["high_contrast"]
+        font = self.message.font()
+        font.setPixelSize(values["text_size"])
+        self.message.setFont(font)
+        if self.overlay:
+            self.overlay.number_size = values["number_size"]
+            self.overlay.high_contrast = values["high_contrast"]
+        self._fit_message()
+        self.update()
 
     def _connect_screen(self, screen):
         screen.availableGeometryChanged.connect(lambda _: self.keep_on_screen())
@@ -205,6 +265,8 @@ class Speakbar(QWidget):
         active = event.state in (State.LISTENING, State.PROCESSING)
         if hasattr(self.controller, "screen"):
             active = active or self.controller.screen.session.active
+        if hasattr(self.controller, "shortcuts"):
+            active = active or self.controller.shortcuts.active
         name = "Cancelar interação" if active else "Gravar comando"
         if event.state is State.ERROR:
             name = "Tentar novamente"
@@ -213,6 +275,8 @@ class Speakbar(QWidget):
         self.voice.setAccessibleName(name)
         self.voice.setToolTip(name)
         self.voice.setEnabled(event.state not in (State.PREPARING, State.CANCELLING, State.STOPPING, State.STOPPED))
+        if self.controller.settings_open:
+            self.voice.setEnabled(False)
         self.voice.set_listening(event.state is State.LISTENING)
 
     def _update_message(self):
@@ -233,7 +297,7 @@ class Speakbar(QWidget):
         self._resizing_text = True
         try:
             bottom = self.y() + self.height()
-            width = max(40, self.width() - 144 - 18)
+            width = max(40, self.width() - 50 * 3 - 12 * 3 - 20)
             metrics = self.message.fontMetrics()
             text_height = metrics.boundingRect(QRect(0, 0, width, 10000),
                 Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere,
@@ -261,6 +325,10 @@ class Speakbar(QWidget):
         gradient.setColorAt(0, QColor(160, 160, 160, 238))
         gradient.setColorAt(0.5, QColor(151, 151, 151, 238))
         gradient.setColorAt(1, QColor(174, 174, 174, 238))
+        if self.high_contrast:
+            gradient.setColorAt(0, QColor("white"))
+            gradient.setColorAt(0.5, QColor("white"))
+            gradient.setColorAt(1, QColor("white"))
         painter.setBrush(gradient)
         painter.setPen(QPen(QColor(226, 226, 226, 220), 0.8))
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 30, 30)
@@ -325,6 +393,15 @@ class Speakbar(QWidget):
         if self._closing:
             return
         self._closing = True
+        if self._settings_dialog:
+            self._settings_dialog.reject()
+        if self.preferences.effective["remember_position"] and not self.preferences.error:
+            try:
+                overrides = dict(self.preferences.overrides, position=[self.x(), self.y()])
+                self.preferences.save(overrides, self.preferences.shortcuts)
+            except (OSError, ValueError):
+                import logging
+                logging.exception("Não foi possível salvar a posição da barra")
         if self.overlay:
             self.overlay.clear()
         self.close_button.setEnabled(False)
