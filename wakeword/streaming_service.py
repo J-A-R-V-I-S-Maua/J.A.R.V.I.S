@@ -87,6 +87,11 @@ class StreamingVoiceService(VoiceService):
         try:
             while not self.stop_requested.is_set():
                 try:
+                    if self.devices_requested.is_set():
+                        self._enumerate_devices()
+                    if self.paused.is_set() and time.monotonic() < self.audio_test_until:
+                        self._meter_only()
+                        continue
                     if model is None or self.vad is None:
                         self._publish(State.PREPARING)
                         self.speech_config = self.speech_config or SpeechConfig.from_environment()
