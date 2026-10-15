@@ -80,6 +80,12 @@ class ChooseTest(unittest.TestCase):
     def test_palavra_errada_nao_e_perdoada(self):
         self.assertEqual(choose("abrir filosofia futebol", NAMES).status, "none")
 
+    def test_palavra_solta_parecida_nao_basta(self):
+        # "voltar" é 91% parecida com "votar"; com uma palavra só, isso não é prova suficiente.
+        names = ["Passo a passo de como votar", "Back"]
+        self.assertEqual(choose("voltar", names).status, "none")
+        self.assertEqual(choose("abrir voltar", names).status, "none")
+
     def test_som_de_c_e_k(self):
         from screen_access.matching import sound_key
 

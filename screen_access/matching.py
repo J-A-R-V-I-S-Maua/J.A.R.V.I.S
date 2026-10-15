@@ -26,6 +26,7 @@ MIN_WORD_SIMILARITY = 0.75  # semelhança mínima para duas palavras contarem co
 MIN_VERB_SIMILARITY = 0.6  # só vale para a primeira palavra da frase
 MIN_SCORE = 0.75  # nota média mínima de um item
 MIN_SINGLE_WORD_SCORE = 0.9  # frase de uma palavra não tem outra para confirmar: só igual ou início
+MAX_FUZZY_SCORE = 0.89  # semelhança aproximada nunca alcança a nota de igual ou início ("voltar" x "votar")
 MIN_MARGIN = 0.1  # folga exigida do 1º colocado sobre o 2º
 MAX_CANDIDATES = 5
 
@@ -65,7 +66,7 @@ def _similarity(word, other):
     if word.isalpha() and other.isalpha() and min(len(word), len(other)) >= MIN_FUZZY_LENGTH:
         ratio = SequenceMatcher(None, word, other).ratio()
         if ratio >= MIN_WORD_SIMILARITY:
-            return ratio
+            return min(ratio, MAX_FUZZY_SCORE)
     return 0.0
 
 
