@@ -64,6 +64,10 @@ class ScreenExecutor:
                         if kind == "scan":
                             window, depth, limit, hidden = args
                             result = backend.scan(window or last, depth, limit, hidden, cancel.is_set)
+                        elif kind == "prepare_scroll":
+                            result = backend.prepare_scroll(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
+                        elif kind == "scroll":
+                            result = backend.scroll(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind in ("activate", "open_item", "context_menu", "press_enter", "clear_text"):
                             getattr(backend, kind)(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                             result = None

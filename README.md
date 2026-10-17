@@ -2,6 +2,43 @@
 
 J.A.R.V.I.S. (Janela de Apoio e Reconhecimento Virtual de Inclusão) é uma solução computacional baseada em IA que promove a acessibilidade digital para pessoas com dificuldades motoras. Por meio de comandos de voz, permite controlar o computador, escrever textos, mover o mouse, abrir programas e enviar e-mails.
 
+O fluxo implementado hoje usa comandos explícitos para controles acessíveis da tela,
+digitação e atalhos de abertura. Movimento livre do mouse, envio guiado de e-mails,
+interpretação por LLM e interrupção independente por voz são objetivos futuros.
+
+## Feedback, ajuda e recuperação por voz
+
+A resposta é exclusivamente textual. A barra separa o estado **Ouvindo…** ou
+**Transcrevendo…** da orientação da etapa (por exemplo, “Diga confirmar ou cancelar”).
+Após cinco segundos de transcrição, informa que ainda está processando, sem estimar
+porcentagem. O resultado continua visível; uma orientação separada indica quando o
+reconhecimento está pronto para outro “Hey Jarvis”.
+
+Uma frase transcrita que não corresponda a um comando recebe uma explicação e
+exemplos, em vez de simplesmente aparecer como se tivesse sido executada. Silêncio
+e transcrição vazia têm mensagens próprias. Há **uma nova captura automática**;
+se também falhar, a barra pede uma nova ativação. Nenhuma ação já solicitada é repetida.
+
+Nas etapas de escolha, confirmação e ditado, uma resposta inválida ou sem fala
+permite uma repetição. O prazo de 30 segundos de cada etapa não é renovado por
+repetições ou ajuda. Troca de janela, alvo inválido e expiração cancelam a proposta.
+Atalhos não encontrados também permitem uma nova resposta no prazo original.
+
+Diga **“ajuda”**, **“o que posso dizer”** ou **“quais comandos”** para exemplos do
+contexto atual. A mesma ajuda está no menu da bandeja. Durante o ditado, essas
+palavras são texto literal. “Cancelar”, “não” e “parar” mantêm o comportamento de
+cancelamento existente.
+
+Falhas de conexão são recuperadas com esperas de 1, 2, 5, 10 e 15 segundos; as
+seguintes usam 15 segundos. A abertura do microfone é repetida a cada 5 segundos,
+sempre para o dispositivo selecionado. A barra mostra “Reconectando…” ou “Microfone
+indisponível…”. Fechar o aplicativo interrompe as esperas.
+
+**Limitação:** “parar” por voz depende da captura e transcrição; não é um comando
+de emergência independente durante inferência ou execução nativa. O botão cancela
+imediatamente a interação local. Uma ação já enviada a outro aplicativo pode terminar
+e não é desfeita pelo cancelamento.
+
 ## Speakbar integrada ao reconhecimento de voz
 
 Na raiz do projeto, instale as dependências do host (interface e reconhecimento).
@@ -23,21 +60,21 @@ A demonstração `--demo` continua funcionando sem Docker.
 - Aguarde “Aguardando comando” e diga **“hey jarvis”** ou clique no botão de ondas.
 - A barra mostra “Ouvindo…” durante toda a fala.
 - Após aproximadamente **2 segundos de silêncio**, a captura termina e a barra mostra
-  “Transcrevendo…”. O servidor transcreve o áudio completo uma única vez e exibe a frase final.
+  “Transcrevendo…”. O servidor transcreve o áudio completo uma única vez e a interface interpreta o comando.
   Sem fala, a interação termina após **10 segundos**; cada comando dura no máximo **30 segundos**.
-- A frase final permanece até o próximo comando.
+- O resultado da interação permanece até o próximo comando.
   A wake word volta a ficar ativa enquanto esse resultado continua visível.
 - A barra expande para até três linhas. Textos maiores têm rolagem por mouse e teclado.
-  Arraste a área central para reposicioná-la; a posição não é salva.
+  Arraste a área central para reposicioná-la; a posição é salva quando “Lembrar posição” está ativado.
 - Clique novamente nas ondas durante captura ou transcrição para cancelar.
   Uma inferência já iniciada pode terminar no servidor, mas seu resultado será descartado.
 - X, Alt+F4 e “Sair” encerram a interface e a captura de áudio. Durante uma operação em
   andamento, a barra mostra “Encerrando…” até liberar os recursos; ela não fica minimizada.
 - Tab navega entre voz, fechar e texto; Enter/Espaço ativam os botões.
   Com o texto focado, setas e PageUp/PageDown permitem navegar pela transcrição.
-- Falhas de áudio, modelos ou conexão permitem nova tentativa pelo botão.
+- Falhas de áudio ou conexão têm recuperação automática e permitem nova tentativa pelo botão.
   Em caso de desconexão, a barra informa a falha sem apresentar uma transcrição incompleta.
-  Uma interação sem fala volta à escuta da wake word automaticamente.
+  Uma interação sem fala tem uma nova captura automática antes de voltar à escuta da wake word.
 
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
 ou uploads gravados no servidor. As gravações anteriores são preservadas.
@@ -61,6 +98,56 @@ basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
 `wakeword/requirements.txt`. O requirements da raiz referencia ambos, sem duplicá-los.
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
+
+### Rolagem por voz (Windows)
+
+Diga **Hey Jarvis** e **“role para baixo”** ou **“role para cima”**. A rolagem é
+executada diretamente, sem confirmação. Também aceita “rolar para baixo”, “descer
+a tela”, “subir a tela” e as respectivas variações de direção.
+
+| Comando | Intensidade |
+|---|---|
+| Role um pouco para baixo / cima | Ajuste pequeno, aproximadamente 15% da área visível. |
+| Role para baixo / cima | Movimento normal, aproximadamente metade da área visível. |
+| Role uma página para baixo / cima | Movimento maior, aproximadamente 90% da área visível, mantendo sobreposição. |
+
+Quando o aplicativo não informa o tamanho da área visível, é usado o incremento
+nativo pequeno ou grande que ele oferece; a distância pode variar.
+
+Quando há posicionamento preciso disponível, o deslocamento é gradual, com início
+e término suaves: cerca de **0,45 s** no ajuste pequeno, **0,75 s** no normal e
+**1,1 s** em uma página. A distância permanece a mesma. O alvo e a janela são
+revalidados a cada passo, e o cancelamento interrompe os passos restantes. Aplicativos
+que oferecem apenas incrementos nativos mantêm o movimento definido por eles.
+
+Após cada movimento, a barra mostra o resultado e abre uma captura de continuação:
+você tem **cinco segundos para começar a falar**, sem repetir Hey Jarvis.
+
+- **“Mais”** repete a última direção e intensidade.
+- **“Para cima” / “para baixo”** muda a direção, mantendo a intensidade.
+- Um novo comando completo de rolagem muda também a intensidade.
+- **“Parar”**, **“cancelar”** ou silêncio encerra normalmente, sem repetir a captura
+  nem apresentar silêncio como erro. Os demais comandos mantêm seus tempos atuais.
+- A indicação de início/fim só aparece quando o aplicativo informa esse limite.
+  Se ele aceitar o pedido sem permitir observar a posição, a barra informa
+  **“Rolagem solicitada ao aplicativo”**.
+
+A área em foco tem prioridade. Sem essa referência, uma única área disponível
+é selecionada automaticamente; várias áreas ou uma leitura parcial mostram números
+e perguntam **“Qual área você quer rolar?”**. Diga o número para rolar diretamente.
+O foco externo é preservado quando o botão da speakbar recebe foco.
+
+Com números de controles visíveis, a rolagem remove os marcadores antigos e faz
+uma nova leitura após o movimento. **A numeração pode mudar.** Diga um número novo
+para escolher um controle (a ação ainda exige confirmação), ou continue rolando.
+Uma confirmação pendente precisa ser concluída ou cancelada antes de rolar.
+Durante ditado, “role para baixo” é texto literal. Trocar de janela encerra a sessão.
+
+O suporte usa `ScrollPattern` do UI Automation, sem roda do mouse ou teclas como
+fallback. Aplicativos que não expõem esse padrão, incluindo alguns componentes Qt,
+informam indisponibilidade. A versão atual não inclui rolagem horizontal nem contínua.
+O teste isolado `.venv\Scripts\python.exe tests/scroll_native_check.py` verifica
+duas áreas nativas, as intensidades, direções, limites e cancelamento.
 
 ### Acesso à tela integrado à speakbar
 
@@ -131,7 +218,8 @@ incluindo transições rápidas antes do clique na barra, usando
 Trocar de janela ou alterar a posição, o nome ou a disponibilidade de um alvo
 invalida a sessão. Os controles marcados são revalidados periodicamente e antes da ação.
 Não há nova tentativa automática de uma ação; um pedido já iniciado no aplicativo não
-pode ser desfeito pelo cancelamento. Ausência de fala ou resposta inválida cancela a proposta.
+pode ser desfeito pelo cancelamento. Ausência de fala ou resposta inválida permite uma
+nova tentativa na etapa; uma segunda falha cancela a proposta.
 
 A lista usa profundidade **32** e até **3000 elementos visitados** por padrão, para
 alcançar controles de páginas web aninhadas. O limite de tempo de leitura é 5 segundos;
@@ -199,6 +287,9 @@ Validação automatizada e verificação nativa isolada no Windows:
 ```powershell
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 .venv\Scripts\python.exe tests/screen_native_check.py
+.venv\Scripts\python.exe -X faulthandler tests/settings_native_check.py
+.venv\Scripts\python.exe tests/interaction_visual_check.py
+.venv\Scripts\python.exe tests/settings_visual_check.py
 ```
 
 A verificação nativa abre uma janela descartável e valida Invoke, Toggle, foco,
@@ -219,9 +310,26 @@ Abra pela engrenagem da speakbar, pelo menu do ícone da bandeja ou com:
 configurações do Windows são um destino separado no cadastro de atalhos.
 
 O menu tem quatro seções: **Atalhos**, **Voz e microfone**, **Aparência e acessibilidade**
-e **Ajuda e diagnóstico**. Enquanto estiver aberto, o reconhecimento de comandos
-fica pausado e propostas anteriores são canceladas. Fechar ou cancelar retoma a voz.
+e **Ajuda e diagnóstico**. Enquanto estiver aberto, comandos para aplicativos externos
+ficam bloqueados e propostas anteriores são canceladas. A voz aceita apenas comandos do menu.
 Uma segunda abertura traz a mesma janela para frente.
+
+Use **Hey Jarvis** antes de cada comando de menu:
+
+- **Ir para atalhos**, **ir para voz e microfone**, **ir para aparência e acessibilidade**
+  ou **ir para ajuda e diagnóstico**.
+- **Salvar configurações** valida, grava e fecha; **cancelar configurações** ou
+  **fechar configurações** descarta o rascunho e fecha.
+- **Ativar/desativar alto contraste** e **ativar/desativar lembrar posição**.
+- **Tamanho do texto 22**, **tamanho dos números 18**.
+- **Tempo de silêncio 3 segundos**, **tempo para começar a falar 15 segundos**,
+  **duração máxima 30 segundos**, **limiar de ativação 0,3**.
+
+Números também podem ser ditos por extenso, como “vinte e dois” e “zero vírgula três”.
+Valores fora dos limites são recusados. Ajustes ficam no rascunho até salvar; seleção
+de microfone e cadastro de atalhos continuam no formulário. Diga **ajuda** para consultar
+os comandos. Durante um teste de transcrição, até “salvar configurações” é apenas
+texto de diagnóstico e não executa nenhuma ação.
 
 Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site,
 aplicativo `.exe` ou atalho `.lnk`, pasta ou recurso do Windows (Explorador,
@@ -233,8 +341,8 @@ explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocor
 Exemplo: nome **YouTube**, frase **abrir YouTube**, ação **Site**, destino **youtube.com**.
 Depois diga **“executar atalho abrir YouTube”**, ou **“executar atalho”** e responda
 **“abrir YouTube”** na captura automática seguinte. Os atalhos executam diretamente,
-sem confirmação adicional. Os comandos existentes de controle da tela continuam
-exigindo confirmação. A comparação das frases ignora acentos, pontuação, caixa e
+sem confirmação adicional. Cliques, digitação, Enter e limpeza de campo continuam
+exigindo confirmação; rolagem é direta. A comparação das frases ignora acentos, pontuação, caixa e
 espaços extras, mas não adivinha uma frase diferente. Frases repetidas ou reservadas,
 como “cancelar”, “confirmar” e “abra as configurações”, são recusadas.
 

@@ -13,7 +13,7 @@ def defaults():
     return dict(microphone=None, silence_seconds=speech.silence_seconds,
                 start_timeout=speech.start_timeout, max_seconds=speech.max_seconds,
                 detection_threshold=float(os.getenv("DETECTION_THRESHOLD", "0.3")),
-                text_size=18, number_size=14, high_contrast=False, remember_position=True,
+                text_size=18, number_size=12, high_contrast=False, remember_position=True,
                 position=None, max_depth=int(os.getenv("SCREEN_MAX_DEPTH", "32")),
                 max_elements=int(os.getenv("SCREEN_MAX_ELEMENTS", "3000")))
 

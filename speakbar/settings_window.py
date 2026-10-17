@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QF
 from .preferences import defaults, validate_preferences
 from .shortcuts import WINDOWS_RESOURCES, validate_shortcut, validate_shortcuts
 from .settings_style import STYLE, HIGH_CONTRAST
+from .commands import settings_command, all_help
 
 
 class SettingsWindow(QDialog):
@@ -38,9 +39,9 @@ class SettingsWindow(QDialog):
         title.setObjectName("settingsTitle")
         header.addWidget(title)
         header.addStretch()
-        paused = QLabel("●  Voz pausada")
+        paused = QLabel("●  Comandos do menu")
         paused.setObjectName("pausedBadge")
-        paused.setToolTip("O reconhecimento volta ao fechar as configurações.")
+        paused.setToolTip("Diga Hey Jarvis e depois ajuda, salvar configurações ou fechar configurações.")
         header.addWidget(paused)
         root.addLayout(header)
         intro = QLabel("Personalize seus atalhos e deixe o Jarvis do seu jeito.")
@@ -82,6 +83,8 @@ class SettingsWindow(QDialog):
         controller.diagnostic_result.connect(self.audio_status.setText)
         controller.devices_changed.connect(self._devices_updated)
         controller.state_changed.connect(self._diagnostics)
+        if hasattr(controller, "settings_command_requested"):
+            controller.settings_command_requested.connect(self.handle_voice)
         self._fill_preferences(self.baseline)
         self._refresh_shortcuts()
         self._new_shortcut()
@@ -102,6 +105,45 @@ class SettingsWindow(QDialog):
         scroll.setWidget(page)
         self.pages.addWidget(scroll)
         return layout
+
+    def handle_voice(self, text):
+        if not self.isVisible() or not self.controller.settings_open:
+            return
+        try:
+            command = settings_command(text)
+            if command is None:
+                self.controller._recognition_failed("Comando de configurações não reconhecido. Diga ajuda, salvar configurações ou fechar configurações. Ouvindo novamente…")
+                return
+            key, value = command
+            if key == "save":
+                self._save()
+                return
+            if key == "close":
+                self.reject()
+                return
+            if key == "section":
+                self.navigation.setCurrentRow(value)
+                self._voice_notify(f"Seção {self.navigation.currentItem().text()}. Alterações ainda não salvas.")
+                return
+            controls = dict(self.voice_controls, text_size=self.text_size, number_size=self.number_size)
+            if key in ("high_contrast", "remember_position"):
+                (self.contrast if key == "high_contrast" else self.remember).setChecked(value)
+            else:
+                widget = controls[key]
+                if not widget.minimum() <= value <= widget.maximum() or (isinstance(widget, QSpinBox) and value != int(value)):
+                    raise ValueError(f"Informe um valor entre {widget.minimum()} e {widget.maximum()}" + (", sem casas decimais." if isinstance(widget, QSpinBox) else "."))
+                widget.setValue(int(value) if isinstance(widget, QSpinBox) else value)
+            labels = dict(high_contrast="Alto contraste", remember_position="Lembrar posição", text_size="Tamanho do texto",
+                          number_size="Tamanho dos números", silence_seconds="Tempo de silêncio", start_timeout="Tempo para começar a falar",
+                          max_seconds="Duração máxima", detection_threshold="Limiar de ativação")
+            display = ("ativado" if value else "desativado") if isinstance(value, bool) else f"{value:g}".replace(".", ",")
+            self._voice_notify(f"{labels[key]}: {display} no rascunho. Diga salvar configurações para gravar ou fechar configurações para descartar.")
+        except ValueError as exc:
+            self._voice_notify(str(exc), "error")
+
+    def _voice_notify(self, text, tone="note"):
+        self._notify(text, tone)
+        self.controller._show_text(text)
 
     @staticmethod
     def _button(layout, label, callback):
@@ -269,7 +311,7 @@ class SettingsWindow(QDialog):
         self.diagnostics.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.diagnostics)
         help_text = QTextBrowser()
-        help_text.setPlainText('Hey Jarvis → Abra as configurações\nExecutar atalho → diga a frase cadastrada\nExecutar atalho abrir YouTube\nMostrar números → número → confirmar\nClique em pesquisar → confirmar\nClique duas vezes na Lixeira → confirmar\nAbrir menu de contexto da Lixeira → confirmar\nDigitar → frase → confirmar\nEnter → confirmar\nDeletar → confirmar\nCancelar / esconder números\n\nAtalhos abrem destinos diretamente. Os comandos de tela continuam pedindo confirmação. Nenhum histórico de áudio ou transcrições é salvo pelo menu.')
+        help_text.setPlainText(all_help())
         layout.addWidget(help_text)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -478,6 +520,8 @@ class SettingsWindow(QDialog):
             self.accept()
         except (ValueError, OSError) as exc:
             self._notify(f"Não foi possível salvar: {exc}", "error")
+            if hasattr(self.controller, "_show_text"):
+                self.controller._show_text(f"Não foi possível salvar: {exc}. Revise o rascunho ou diga fechar configurações.")
 
     def _notify(self, text, tone="note"):
         self.status.setText(text)

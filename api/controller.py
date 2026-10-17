@@ -1,11 +1,9 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form
 from pydantic import BaseModel
 from celery import Celery, uuid
 from celery.result import AsyncResult
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import UploadFile
-from fastapi import FastAPI, UploadFile, File, Form
 
 app = FastAPI()
 from streaming import router as streaming_router
@@ -28,11 +26,10 @@ async def post_transcribe(request: TranscriptionRequest):
     task_id = uuid()
 
     async_task = await run_in_threadpool(
-            celery_app.send_task(
-            "task.transcribe",
-            args=[request.url, request.language],
-            task_id=task_id,
-        )
+        celery_app.send_task,
+        "task.transcribe",
+        args=[request.url, request.language],
+        task_id=task_id,
     )
 
     return {

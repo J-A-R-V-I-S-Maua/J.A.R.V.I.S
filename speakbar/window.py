@@ -5,7 +5,7 @@ import math
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QTextEdit, QMenu, QPushButton, QSystemTrayIcon, QWidget,
+    QApplication, QHBoxLayout, QVBoxLayout, QLabel, QTextEdit, QMenu, QPushButton, QSystemTrayIcon, QWidget,
 )
 
 from .controller import DemoController, VoiceController, State
@@ -114,14 +114,12 @@ class CircleButton(QPushButton):
         if self.kind == "voice":
             draw_wave(painter, QPoint(25, 25), self.phase, self.listening)
         elif self.kind == "settings":
-            painter.setPen(QPen(QColor("#111111"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.setPen(QPen(QColor("#111111"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(QRectF(16, 16, 18, 18))
-            painter.drawEllipse(QRectF(22, 22, 6, 6))
-            for index in range(8):
-                angle = index * math.pi / 4
-                painter.drawLine(QPoint(round(25 + 10 * math.cos(angle)), round(25 + 10 * math.sin(angle))),
-                                 QPoint(round(25 + 14 * math.cos(angle)), round(25 + 14 * math.sin(angle))))
+            for y, knob_x in ((18, 22), (25, 29), (32, 23)):
+                painter.drawLine(16, y, knob_x - 3, y)
+                painter.drawLine(knob_x + 3, y, 34, y)
+                painter.drawEllipse(QRectF(knob_x - 2.5, y - 2.5, 5, 5))
         else:
             painter.setPen(QPen(QColor("#111111"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawLine(17, 17, 33, 33)
@@ -158,9 +156,15 @@ class Speakbar(QWidget):
         self.close_button.setAccessibleName("Fechar aplicação")
         self.close_button.setToolTip("Fechar aplicação (Alt+F4)")
         self.message = TranscriptView(self)
+        self.guidance = QLabel(self)
+        self.guidance.setWordWrap(True)
+        self.guidance.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.guidance.setAccessibleName("Orientação da interação")
+        self.guidance.setStyleSheet("QLabel { color: #111111; background: transparent; }")
         font = QFont("Segoe UI")
         font.setPixelSize(18)
         self.message.setFont(font)
+        self.guidance.setFont(font)
         self.message.setStyleSheet("QTextEdit { color: #111111; background: transparent; border: 0; } QTextEdit:focus { border-bottom: 1px solid #005ea8; }")
         self.message.setMinimumWidth(0)
         self.message.viewport().installEventFilter(self)
@@ -171,7 +175,12 @@ class Speakbar(QWidget):
         layout.setContentsMargins(8, 5, 12, 5)
         layout.setSpacing(12)
         layout.addWidget(self.voice)
-        layout.addWidget(self.message, 1)
+        content = QVBoxLayout()
+        content.setSpacing(2)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.addWidget(self.message)
+        content.addWidget(self.guidance)
+        layout.addLayout(content, 1)
         layout.addWidget(self.settings_button)
         layout.addWidget(self.close_button)
         self.setTabOrder(self.voice, self.settings_button)
@@ -193,6 +202,7 @@ class Speakbar(QWidget):
         self.tray_menu = QMenu()
         self.tray_menu.addAction("Mostrar barra", self.restore)
         self.tray_menu.addAction("Configurações", self.open_settings)
+        self.tray_menu.addAction("Ajuda de comandos", self.show_help)
         self.tray_menu.addSeparator()
         self.tray_menu.addAction("Sair", self.quit)
         self.tray.setContextMenu(self.tray_menu)
@@ -233,10 +243,19 @@ class Speakbar(QWidget):
         dialog.raise_()
         dialog.activateWindow()
 
+    def show_help(self):
+        if hasattr(self.controller, "show_help"):
+            self.controller.show_help()
+        else:
+            self.open_settings()
+
     def _settings_closed(self, result):
         self._settings_dialog = None
         if not self._closing:
             self.controller.set_settings_open(False)
+            if hasattr(self.controller, "_show_text"):
+                self.controller._show_text("Configurações salvas. Diga Hey Jarvis para começar." if result == 1 else
+                                           "Alterações descartadas. Diga Hey Jarvis para começar.")
         self._render_state(self.controller.current_event)
 
     def apply_appearance(self, values):
@@ -244,6 +263,7 @@ class Speakbar(QWidget):
         font = self.message.font()
         font.setPixelSize(values["text_size"])
         self.message.setFont(font)
+        self.guidance.setFont(font)
         if self.overlay:
             self.overlay.number_size = values["number_size"]
             self.overlay.high_contrast = values["high_contrast"]
@@ -258,10 +278,14 @@ class Speakbar(QWidget):
         self.keep_on_screen()
 
     def _render_state(self, event):
+        presentation = getattr(self.controller, "presentation", None)
+        self.guidance.setText(presentation.guidance if presentation else "")
+        self.guidance.setVisible(bool(self.guidance.text()))
         self._update_message()
         self.message.setAccessibleName("Transcrição e estado do reconhecimento")
-        self.message.setAccessibleDescription(event.text)
-        self.message.setToolTip(event.text)
+        description = " ".join((presentation.message, presentation.guidance)) if presentation else event.text
+        self.message.setAccessibleDescription(description)
+        self.message.setToolTip(description)
         active = event.state in (State.LISTENING, State.PROCESSING)
         if hasattr(self.controller, "screen"):
             active = active or self.controller.screen.session.active
@@ -280,8 +304,10 @@ class Speakbar(QWidget):
         self.voice.set_listening(event.state is State.LISTENING)
 
     def _update_message(self):
-        if self.message.toPlainText() != self.controller.text:
-            self.message.setPlainText(self.controller.text)
+        presentation = getattr(self.controller, "presentation", None)
+        text = presentation.message if presentation else self.controller.text
+        if self.message.toPlainText() != text:
+            self.message.setPlainText(text)
             cursor = self.message.textCursor()
             block = cursor.blockFormat()
             block.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -301,9 +327,10 @@ class Speakbar(QWidget):
             metrics = self.message.fontMetrics()
             text_height = metrics.boundingRect(QRect(0, 0, width, 10000),
                 Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere,
-                self.controller.text).height()
+                self.message.toPlainText()).height()
             lines = min(3, max(1, math.ceil(text_height / metrics.lineSpacing())))
-            height = max(60, lines * metrics.lineSpacing() + 16)
+            guidance_height = self.guidance.heightForWidth(width) + 4 if self.guidance.text() else 0
+            height = max(60, lines * metrics.lineSpacing() + 16 + guidance_height)
             screen = QApplication.screenAt(self.pos() + self.rect().center()) or QApplication.primaryScreen()
             self.setFixedHeight(min(height, screen.availableGeometry().height()))
             self.message.setFixedHeight(min(lines * metrics.lineSpacing() + 4, self.height() - 10))

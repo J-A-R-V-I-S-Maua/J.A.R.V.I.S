@@ -8,7 +8,7 @@ import threading
 import time
 import wave
 
-from .events import Cancelled, State, VoiceEvent, check_cancelled
+from .events import Cancelled, State, VoiceEvent, Reason, check_cancelled
 from .microphone import select_input_device
 from .transcription_client import TranscriptionClient, TranscriptionError
 
@@ -74,6 +74,7 @@ class VoiceService:
         self.on_devices = on_devices
         self.devices_requested = threading.Event()
         self.paused = threading.Event()
+        self.context_listening = False
         self.diagnostic_capture = threading.Event()
         self.audio_test_until = 0
         self.current_diagnostic = False
@@ -82,6 +83,10 @@ class VoiceService:
         self.trigger_requested = threading.Event()
         self._lock = threading.RLock()
         self._interaction_id = 0
+        self.capture_ready = False
+        self._next_start_timeout = None
+        self.current_start_timeout = None
+        self._published_at = time.monotonic()
         self._snapshot = VoiceEvent(State.PREPARING, State.PREPARING.value)
 
     @property
@@ -89,14 +94,19 @@ class VoiceService:
         with self._lock:
             return self._snapshot
 
-    def _publish(self, state, text=None, *, interaction_id=None, task_id=None, sequence=0, is_final=False):
+    def _publish(self, state, text=None, *, interaction_id=None, task_id=None, sequence=0, is_final=False, reason=None):
         with self._lock:
             if interaction_id is not None and interaction_id != self._interaction_id:
                 return
             if self.stop_requested.is_set() and state not in (State.STOPPING, State.STOPPED):
                 return
             event = VoiceEvent(state, text or state.value, self._interaction_id, task_id,
-                               sequence, is_final or state is State.RESULT)
+                               sequence, is_final or state is State.RESULT, reason, self.capture_ready, self.current_diagnostic)
+            now = time.monotonic()
+            logging.info("voice transition=%s->%s interaction=%s reason=%s elapsed=%.3f",
+                         self._snapshot.state.name, state.name, self._interaction_id,
+                         reason.value if reason else None, now - self._published_at)
+            self._published_at = now
             self._snapshot = event
             self.on_event(event)
 
@@ -144,14 +154,17 @@ class VoiceService:
             if audio is not None:
                 audio.terminate()
 
-    def request_capture(self, diagnostic=False):
+    def request_capture(self, diagnostic=False, start_timeout=None):
         """Solicita uma captura sem alternar ou cancelar uma operação em andamento."""
         with self._lock:
-            if self.paused.is_set() and not diagnostic:
+            if start_timeout is not None and (isinstance(start_timeout, bool) or not isinstance(start_timeout, (int, float)) or not 0 < start_timeout <= 30):
+                raise ValueError("O tempo de espera da captura deve estar entre 0 e 30 segundos.")
+            if self.paused.is_set() and not self.context_listening and not diagnostic:
                 return False
             if self.stop_requested.is_set() or self._snapshot.state in (
                     State.LISTENING, State.PROCESSING, State.CANCELLING, State.STOPPING, State.STOPPED):
                 return False
+            self._next_start_timeout = start_timeout
             self.trigger_requested.set()
             if diagnostic:
                 self.diagnostic_capture.set()
@@ -160,6 +173,7 @@ class VoiceService:
     def cancel_interaction(self):
         with self._lock:
             self.trigger_requested.clear()
+            self._next_start_timeout = None
             if self._snapshot.state in (State.LISTENING, State.PROCESSING):
                 self._interaction_id += 1
                 self.cancel_requested.set()
@@ -194,6 +208,20 @@ class VoiceService:
             if self.trigger_requested.wait(0.1):
                 self.trigger_requested.clear()
                 return
+
+    def _recover(self, reason, attempt=0):
+        delay = (1, 2, 5, 10, 15)[min(attempt, 4)] if reason is Reason.CONNECTION else 5
+        self.capture_ready = False
+        message = {Reason.CONNECTION: "Reconectando…",
+                   Reason.MICROPHONE: "Microfone indisponível. Tentando reconectar o dispositivo selecionado…",
+                   Reason.MODEL: "Reconhecimento indisponível. Tentando preparar os modelos…"}[reason]
+        self._publish(State.ERROR, message, reason=reason)
+        deadline = time.monotonic() + delay
+        while not self.stop_requested.is_set() and time.monotonic() < deadline:
+            if self.trigger_requested.wait(min(0.1, max(0, deadline - time.monotonic()))):
+                self.trigger_requested.clear()
+                break
+        return not self.stop_requested.is_set()
 
     def _check_ready(self):
         pass
@@ -230,15 +258,15 @@ class VoiceService:
             resources.callback(stream.close)
             resources.callback(stream.stop_stream)
             model.reset()
-            if self.snapshot.state in (State.PREPARING, State.CANCELLING):
-                self._publish(State.IDLE)
+            self.capture_ready = True
+            self._publish(State.IDLE)
             while True:
                 check_cancelled(self.stop_requested.is_set)
                 if self.devices_requested.is_set():
                     self._publish_devices(audio)
                 self._check_ready()
                 manual = self.trigger_requested.is_set() or self.diagnostic_capture.is_set()
-                if self.paused.is_set() and not (manual and self.diagnostic_capture.is_set()):
+                if self.paused.is_set() and (not self.context_listening or time.monotonic() < self.audio_test_until) and not (manual and self.diagnostic_capture.is_set()):
                     chunk = _read_chunk(stream, self.stop_requested.is_set)
                     if time.monotonic() < self.audio_test_until:
                         samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
@@ -252,17 +280,20 @@ class VoiceService:
                         continue
                 with self._lock:
                     check_cancelled(self.stop_requested.is_set)
-                    if self.paused.is_set() and not self.diagnostic_capture.is_set():
+                    if self.paused.is_set() and not self.context_listening and not self.diagnostic_capture.is_set():
                         continue
                     self.trigger_requested.clear()
+                    self.current_start_timeout = self._next_start_timeout if manual else None
+                    self._next_start_timeout = None
                     self.current_diagnostic = self.diagnostic_capture.is_set()
                     self.diagnostic_capture.clear()
                     self.cancel_requested.clear()
                     self._interaction_id += 1
                     interaction_id = self._interaction_id
+                    self.capture_ready = False
                     self._publish(State.LISTENING)
                 path = capture(stream, audio, interaction_id) if capture else record_audio(
-                    RECORD_SECONDS, mic_stream=stream, audio_interface=audio,
+                    min(RECORD_SECONDS, self.current_start_timeout) if self.current_start_timeout else RECORD_SECONDS, mic_stream=stream, audio_interface=audio,
                     cancelled=self.cancel_requested.is_set)
                 check_cancelled(self.cancel_requested.is_set)
                 return path, interaction_id
@@ -283,8 +314,8 @@ class VoiceService:
                         break
                     except Exception as exc:
                         self.audio_test_until = 0
-                        self._publish(State.ERROR, f"Microfone indisponível: {exc}")
-                        self._wait_for_retry()
+                        self._publish(State.ERROR, f"Microfone indisponível: {exc}", reason=Reason.MICROPHONE)
+                        self._recover(Reason.MICROPHONE)
                     continue
                 if model is None:
                     self._publish(State.PREPARING)
@@ -295,8 +326,8 @@ class VoiceService:
                         break
                     except Exception:
                         logging.exception("Falha ao preparar reconhecimento")
-                        self._publish(State.ERROR, "Falha ao preparar reconhecimento. Clique para tentar novamente.")
-                        self._wait_for_retry()
+                        self._publish(State.ERROR, "Falha ao preparar reconhecimento. Tentando novamente…", reason=Reason.MODEL)
+                        self._recover(Reason.MODEL)
                         continue
                 try:
                     self.cancel_requested.clear()
@@ -309,8 +340,8 @@ class VoiceService:
                 except Exception as exc:
                     logging.exception("Falha na captura de áudio")
                     self._publish(State.ERROR, str(exc) if isinstance(exc, ValueError) else
-                                  "Microfone indisponível. Verifique o dispositivo e clique para tentar novamente.")
-                    self._wait_for_retry()
+                                  "Microfone indisponível. Tentando reconectar…", reason=Reason.MICROPHONE)
+                    self._recover(Reason.MICROPHONE)
                     self._publish(State.PREPARING)
                     continue
                 try:
@@ -324,13 +355,15 @@ class VoiceService:
                     check_cancelled(self.cancel_requested.is_set)
                     self._publish(State.RESULT if transcript.text else State.ERROR,
                                   transcript.text or "Nenhuma fala reconhecida. Tente novamente.",
-                                  interaction_id=interaction_id, task_id=transcript.task_id)
+                                  interaction_id=interaction_id, task_id=transcript.task_id,
+                                  reason=None if transcript.text else Reason.EMPTY_TRANSCRIPT)
                 except Cancelled:
                     self._publish(State.IDLE)
                 except (TranscriptionError, OSError) as exc:
                     logging.warning("Falha de transcrição: %s", exc)
                     message = str(exc) if isinstance(exc, TranscriptionError) else "Não foi possível ler o áudio. Tente novamente."
-                    self._publish(State.ERROR, message, interaction_id=interaction_id)
+                    self._publish(State.ERROR, message, interaction_id=interaction_id, reason=Reason.CONNECTION)
+                    self._recover(Reason.CONNECTION)
                 finally:
                     if self.current_diagnostic:
                         try:
@@ -356,6 +389,7 @@ def create_service(on_event=lambda event: None, **kwargs):
 
 
 def start():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     def report(event):
         print(event.text, flush=True)
         if event.task_id:

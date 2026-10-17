@@ -1,5 +1,6 @@
 """Ponte Qt da sessão de tela. Não transporta referências COM/AX."""
 import os
+import time
 from PySide6.QtCore import QObject, QTimer, Signal
 from screen_access.executor import ScreenExecutor
 from screen_access.session import ScreenSession
@@ -43,7 +44,8 @@ class ScreenController(QObject):
         else:
             self.validation.stop()
         if self.session.active:
-            self.expiration.start(90000 if view.state.value == "executing" else 30000)
+            remaining = self.session.deadline - time.monotonic() if self.session.deadline else 30
+            self.expiration.start(max(1, int(remaining * 1000)))
         else:
             self.expiration.stop()
         self.changed.emit(view)
@@ -51,7 +53,7 @@ class ScreenController(QObject):
     def _reply(self, token, kind, data):
         if self.closing:
             return
-        if kind in ("scan", "activate", "open_item", "context_menu", "press_enter", "clear_text", "validate", "error"):
+        if kind in ("scan", "prepare_scroll", "scroll", "activate", "open_item", "context_menu", "press_enter", "clear_text", "validate", "error"):
             self._validating = False
         was_active = self.session.active
         had_target = self.session.target is not None

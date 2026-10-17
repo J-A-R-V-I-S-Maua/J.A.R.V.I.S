@@ -31,6 +31,7 @@ class QtIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.controller = VoiceController(screen_factory=FakeScreen)
         self.service = VoiceService()
+        self.service.capture_ready = True
         self.controller.thread = Mock()
         self.controller.thread.service = self.service
 
@@ -127,6 +128,7 @@ class ControllerFlowTest(unittest.TestCase):
 
         class FakeVoice(VoiceService):
             def run(self):
+                self.capture_ready = True
                 self._publish(State.IDLE)
                 self.stop_requested.wait(3)
                 self._publish(State.STOPPED)

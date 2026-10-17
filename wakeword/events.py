@@ -15,6 +15,14 @@ class State(Enum):
     STOPPED = "Encerrado"
 
 
+class Reason(Enum):
+    NO_SPEECH = "no_speech"
+    EMPTY_TRANSCRIPT = "empty_transcript"
+    CONNECTION = "connection_unavailable"
+    MICROPHONE = "microphone_unavailable"
+    MODEL = "model_unavailable"
+
+
 @dataclass(frozen=True)
 class VoiceEvent:
     state: State
@@ -23,6 +31,9 @@ class VoiceEvent:
     task_id: str | None = None
     sequence: int = 0
     is_final: bool = False
+    reason: Reason | None = None
+    capture_ready: bool = False
+    diagnostic: bool = False
 
 
 class Cancelled(Exception):

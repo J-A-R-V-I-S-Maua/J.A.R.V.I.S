@@ -2,8 +2,10 @@
 from dataclasses import dataclass
 from enum import Enum
 import re
+import time
 from .commands import CANCEL, CONFIRM, FIELD_COMMANDS, action_command, normalized, parse_number
 from .matching import choose
+from .scroll import parse_scroll, ScrollOutcome
 
 
 class ActionState(Enum):
@@ -13,6 +15,9 @@ class ActionState(Enum):
     CONFIRMING = "confirming"
     DICTATING = "dictating"
     EXECUTING = "executing"
+    SCROLL_CHOOSING = "scroll_choosing"
+    SCROLLING = "scrolling"
+    SCROLL_WAITING = "scroll_waiting"
 
 
 @dataclass(frozen=True)
@@ -41,13 +46,63 @@ class ScreenSession:
         self.dictation_text = None
         self.is_dictation = False
         self.pending_action = "activate"
+        self.retry_count = 0
+        self.deadline = None
+        self._step = self.state
+        self._reset_scroll()
+
+    def _reset_scroll(self):
+        self.scroll_request = None
+        self.scroll_snapshot = None
+        self.scroll_selected = None
+        self.scroll_restore_numbers = False
+        self.scroll_refresh = False
+        self.scroll_message = ""
+
+    @property
+    def scroll_continuing(self):
+        return self.scroll_request is not None and self.state in (ActionState.SCROLL_WAITING, ActionState.CHOOSING)
+
+    @property
+    def capture_timeout(self):
+        return 5 if self.scroll_continuing else None
+
+    def end_scroll(self):
+        self.cancel("Rolagem encerrada. Diga Hey Jarvis para outro comando.")
 
     @property
     def active(self):
         return self.state is not ActionState.IDLE
 
     def view(self, text, elements=(), capture=False):
+        if self.state is not self._step:
+            self._step = self.state
+            self.retry_count = 0
+            self.deadline = time.monotonic() + (90 if self.state in (ActionState.EXECUTING, ActionState.SCROLLING) else 30) if self.active else None
         self.publish(ActionView(text, tuple(elements), capture, self.state))
+
+    def retry(self, text):
+        if self.retry_count or (self.deadline is not None and time.monotonic() >= self.deadline):
+            self.cancel("Não consegui concluir. Diga ‘Hey Jarvis’ para tentar novamente.")
+            return
+        self.retry_count += 1
+        elements = tuple(self.snapshot.elements[n-1] for n in self.candidates) if self.snapshot and self.state is ActionState.CHOOSING else ()
+        if self.state is ActionState.SCROLL_CHOOSING and self.scroll_snapshot:
+            elements = self.scroll_snapshot.elements
+        if self.snapshot and self.state is ActionState.CONFIRMING and not self.is_dictation:
+            elements = (self.snapshot.elements[self.selected-1],)
+        self.view(text, elements, capture=True)
+
+    def help(self, text):
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            self.cancel("Interação expirada. Repita o comando.")
+            return
+        elements = tuple(self.snapshot.elements[n-1] for n in self.candidates) if self.snapshot and self.state is ActionState.CHOOSING else ()
+        if self.state is ActionState.SCROLL_CHOOSING and self.scroll_snapshot:
+            elements = self.scroll_snapshot.elements
+        if self.snapshot and self.state is ActionState.CONFIRMING and not self.is_dictation:
+            elements = (self.snapshot.elements[self.selected-1],)
+        self.view(text, elements, capture=self.state in (ActionState.CHOOSING, ActionState.CONFIRMING, ActionState.SCROLL_CHOOSING, ActionState.SCROLL_WAITING))
 
     def begin_capture(self):
         if not self.active:
@@ -64,7 +119,33 @@ class ScreenSession:
         self.dictation_text = None
         self.is_dictation = False
         self.pending_action = "activate"
+        self._reset_scroll()
         self.view(text)
+
+    def _start_scroll(self, request):
+        if self.unavailable:
+            self.view(self.unavailable)
+            return
+        if self.target is None:
+            self.view("Selecione uma janela de aplicativo antes de rolar.")
+            return
+        self.scroll_restore_numbers = self.state is ActionState.CHOOSING
+        self.scroll_request = request
+        self.pending_action = "activate"
+        self.token += 1
+        self.state = ActionState.SCROLLING
+        self.view("Identificando área rolável…")
+        self.executor.submit(self.token, "prepare_scroll", self.target, self.max_depth, self.max_elements)
+
+    def _execute_scroll(self, request):
+        self.scroll_request = request
+        self.state = ActionState.SCROLLING
+        self.token += 1
+        self.view("Rolando para cima…" if request.direction == "up" else "Rolando para baixo…")
+        self.executor.submit(self.token, "scroll", self.scroll_snapshot, self.scroll_selected, request)
+
+    def _scroll_prompt(self):
+        return self.scroll_message + " Diga mais, para cima, para baixo ou parar."
 
     def receive(self, token, kind, data):
         if kind == "foreground":
@@ -82,9 +163,41 @@ class ScreenSession:
             return
         if kind == "error":
             self.cancel(data)
+        elif kind == "prepare_scroll":
+            self.scroll_snapshot = data.snapshot
+            if not data.snapshot.elements:
+                self.cancel("Não consegui identificar uma área para rolar nesta janela.")
+            elif data.preferred:
+                self.scroll_selected = data.preferred
+                self._execute_scroll(self.scroll_request)
+            else:
+                self.state = ActionState.SCROLL_CHOOSING
+                self.view("Qual área você quer rolar? Diga um dos números ou cancelar." +
+                          (" Lista parcial de áreas." if data.snapshot.truncated else ""), data.snapshot.elements, True)
+        elif kind == "scroll":
+            self.scroll_message = {ScrollOutcome.MOVED: "Tela rolada para cima." if self.scroll_request.direction == "up" else "Tela rolada para baixo.",
+                                   ScrollOutcome.START: "Você chegou ao início.", ScrollOutcome.END: "Você chegou ao fim.",
+                                   ScrollOutcome.REQUESTED: "Rolagem solicitada ao aplicativo."}[data]
+            if self.scroll_restore_numbers:
+                self.scroll_refresh = True
+                self.pending_phrase = None
+                self.state = ActionState.READING
+                self.token += 1
+                self.view(self.scroll_message + " Atualizando números…")
+                self.executor.submit(self.token, "scan", self.target, self.max_depth, self.max_elements, False)
+            else:
+                self.state = ActionState.SCROLL_WAITING
+                self.view(self._scroll_prompt(), capture=True)
         elif kind == "scan":
             self.snapshot = data
             self.target = data.window
+            if self.scroll_refresh:
+                self.scroll_refresh = False
+                self.candidates = tuple(element.number for element in data.elements)
+                self.state = ActionState.CHOOSING if data.elements else ActionState.SCROLL_WAITING
+                extra = " Números atualizados. Diga um número para escolher ou continue a rolagem." if data.elements else " Nenhum controle disponível nesta janela."
+                self.view(self._scroll_prompt() + extra + (" Lista parcial." if data.truncated else ""), data.elements, True)
+                return
             if not data.elements:
                 suffix = " Leitura parcial; aumente os limites SCREEN_MAX_DEPTH/SCREEN_MAX_ELEMENTS." if data.truncated else ""
                 self.cancel("Nenhum controle disponível nesta janela." + suffix)
@@ -136,7 +249,11 @@ class ScreenSession:
             if number <= len(self.snapshot.elements):
                 self.confirm_selection(number)
             else:
-                self.cancel("Esse número não está na lista. Diga mostrar números novamente.")
+                if self.state is ActionState.READING:
+                    self.state = ActionState.CHOOSING
+                    self.candidates = tuple(element.number for element in self.snapshot.elements)
+                    self.view("Escolha um dos números exibidos.", self.snapshot.elements)
+                self.retry("Esse número não está na lista. Diga um dos números exibidos ou cancelar.")
             return
         choice = choose(phrase, [element.name for element in self.snapshot.elements])
         if choice.status == "match":
@@ -150,11 +267,21 @@ class ScreenSession:
             self.cancel("Não encontrei esse controle. Diga mostrar números para consultar a lista.")
 
     def handle(self, text):
+        if self.active and self.deadline is not None and time.monotonic() >= self.deadline:
+            self.cancel("Interação expirada. Repita o comando.")
+            return True
         phrase = normalized(text)
         if phrase in CANCEL or phrase in {"esconder numeros", "ocultar numeros"}:
-            self.cancel("Números ocultados." if "numeros" in phrase else "Ação cancelada.")
+            if self.scroll_request is not None and "numeros" not in phrase:
+                self.end_scroll()
+            else:
+                self.cancel("Números ocultados." if "numeros" in phrase else "Ação cancelada.")
             return True
+        request = parse_scroll(text, self.scroll_request)
         if self.state is ActionState.CONFIRMING:
+            if request:
+                self.help("Diga confirmar ou cancelar antes de rolar a tela.")
+                return True
             if phrase in CONFIRM:
                 self.state = ActionState.EXECUTING
                 self.token += 1
@@ -166,7 +293,7 @@ class ScreenSession:
                                "clear_text": "Apagando conteúdo do campo…"}.get(self.pending_action, "Acionando controle…"))
                     self.executor.submit(self.token, self.pending_action, self.snapshot, self.selected)
             else:
-                self.cancel("Confirmação inválida. Ação cancelada; repita o comando.")
+                self.retry("Confirmação inválida. Diga confirmar ou cancelar. Ouvindo novamente…")
             return True
         if self.state is ActionState.DICTATING:
             if not text.strip() or any(ord(char) < 32 for char in text):
@@ -175,17 +302,42 @@ class ScreenSession:
                 self.dictation_text = text.strip()
                 self.confirm_dictation()
             return True
+        if self.state is ActionState.SCROLL_CHOOSING:
+            number = parse_number(text)
+            if number is not None and 1 <= number <= len(self.scroll_snapshot.elements):
+                self.scroll_selected = number
+                self._execute_scroll(self.scroll_request)
+            else:
+                self.retry("Diga um dos números das áreas roláveis ou cancelar.")
+            return True
+        if request and self.state in (ActionState.IDLE, ActionState.CHOOSING, ActionState.SCROLL_WAITING):
+            if self.scroll_selected is not None:
+                self._execute_scroll(request)
+            else:
+                self._start_scroll(request)
+            return True
+        if self.state is ActionState.SCROLL_WAITING:
+            # Comandos de tela explícitos podem substituir a continuação.
+            if action_command(text) or phrase in FIELD_COMMANDS or phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"} or re.match(r"^\s*digitar\b", text, re.IGNORECASE):
+                target = self.target
+                self.cancel("")
+                self.target = target
+            else:
+                self.retry("Diga mais, para cima, para baixo ou parar.")
+                return True
         if self.state is ActionState.CHOOSING:
             number = parse_number(text)
             if number in self.candidates:
+                self._reset_scroll()
                 command = action_command(text)
                 if command and command[0] != "activate":
                     self.pending_action = command[0]
                 self.confirm_selection(number)
             else:
-                self.cancel("Escolha inválida. Diga mostrar números para tentar novamente.")
+                self.retry("Escolha inválida. Diga um dos números exibidos ou cancelar. Ouvindo novamente…")
             return True
         if self.active:
+            self.view("Operação em andamento. Aguarde o resultado.")
             return True  # Uma operação em andamento não aceita uma segunda ação.
         command = action_command(text)
         field_action = FIELD_COMMANDS.get(phrase)
