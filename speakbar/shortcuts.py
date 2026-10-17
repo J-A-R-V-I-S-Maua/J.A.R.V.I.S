@@ -1,24 +1,14 @@
 """Atalhos de abertura: correspondência exata e destinos tipados, sem shell."""
 import os
 from pathlib import Path
-import re
 import sys
-import unicodedata
+import time
 from urllib.parse import urlsplit
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 
 
-def normalize(text):
-    text = unicodedata.normalize("NFKD", text.casefold())
-    return " ".join(re.findall(r"[a-z0-9]+", "".join(c for c in text if not unicodedata.combining(c))))
-
-
-SETTINGS_COMMANDS = {normalize(text) for text in (
-    "abra as configurações", "abrir configurações", "abra configurações", "abrir as configurações",
-    "abra as configurações do Jarvis", "abrir configurações do Jarvis", "abrir as configurações do Jarvis",
-)}
-RESERVED = SETTINGS_COMMANDS | {"cancelar", "cancele", "nao", "parar", "pare", "sim", "confirmar", "confirme", "executar atalho"}
+from .commands import normalize, SETTINGS_COMMANDS, RESERVED
 WINDOWS_RESOURCES = {"explorer": "Explorador de Arquivos", "settings": "Configurações do Windows",
                      "network": "Configurações de Rede", "sound": "Configurações de Som"}
 
@@ -125,6 +115,8 @@ class ShortcutConversation(QObject):
         self.service = service
         self.active = False
         self.generation = 0
+        self.retry_count = 0
+        self.deadline = None
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(lambda: self.cancel("Atalho expirado. Repita executar atalho."))
@@ -133,6 +125,8 @@ class ShortcutConversation(QObject):
         was_active = self.active
         self.generation += 1
         self.active = False
+        self.retry_count = 0
+        self.deadline = None
         self.timer.stop()
         if was_active:
             self.cancelled.emit()
@@ -149,6 +143,8 @@ class ShortcutConversation(QObject):
             return True
         if value == "executar atalho":
             self.active = True
+            self.retry_count = 0
+            self.deadline = time.monotonic() + 30
             self.timer.start(30000)
             self.changed.emit("Qual atalho? Diga a frase cadastrada ou cancelar.")
             self.capture_requested.emit()
@@ -158,17 +154,37 @@ class ShortcutConversation(QObject):
             return True
         return False
 
+    def retry(self, message):
+        if self.retry_count or (self.deadline is not None and time.monotonic() >= self.deadline):
+            self.cancel("Não consegui concluir. Diga ‘Hey Jarvis’ para tentar novamente.")
+            return
+        self.retry_count += 1
+        self.changed.emit(message)
+        self.capture_requested.emit()
+
     def _queue(self, phrase):
-        self.timer.stop()
+        if not self.active:
+            self.retry_count = 0
+            self.deadline = time.monotonic() + 30
+        self.timer.start(max(1, int(((self.deadline or time.monotonic() + 30) - time.monotonic()) * 1000)))
         self.active = True
         generation = self.generation
 
         def launch():
             if not self.active or generation != self.generation:
                 return
-            self.active = False
+            if self.deadline is not None and time.monotonic() >= self.deadline:
+                self.cancel("Atalho expirado. Repita executar atalho.")
+                return
             try:
-                message = self.service.execute(self.service.resolve(phrase))
+                item = self.service.resolve(phrase)
+            except ValueError as exc:
+                self.retry(str(exc) + " Diga a frase cadastrada ou cancelar. Ouvindo novamente…")
+                return
+            self.active = False
+            self.timer.stop()
+            try:
+                message = self.service.execute(item)
             except ValueError as exc:
                 message = str(exc)
             self.changed.emit(message)

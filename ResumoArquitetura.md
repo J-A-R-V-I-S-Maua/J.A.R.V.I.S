@@ -1,97 +1,128 @@
-# Agente de Voz para Acessibilidade Motora
+# Arquitetura atual do J.A.R.V.I.S.
 
-Resumo do projeto — arquitetura, decisões de escopo e plano de MVP de 3 meses.
+O aplicativo auxilia pessoas com dificuldades motoras a controlar o computador por
+voz. A experiência atual prioriza Windows e português brasileiro, com feedback
+somente textual. Este documento descreve o que está implementado; a evolução
+planejada aparece ao final.
 
-## Visão geral
+## Fluxo implementado
 
-Sistema de agente controlado por voz capaz de realizar ações no computador — pesquisas, cliques de mouse, digitação, abertura de aplicativos, entre outros — a partir de comandos falados. O foco do projeto é acessibilidade: atender pessoas com deficiência motora, **parcial ou total**, que têm dificuldade ou impossibilidade de usar mouse e teclado convencionais.
+1. A wake word “Hey Jarvis” ou o botão inicia a captura no host.
+2. O VAD detecta fala e encerra após o silêncio configurado.
+3. No modo padrão, PCM é enviado por WebSocket; o Whisper transcreve o áudio
+   completo uma vez, após o fim da fala.
+4. O coordenador escolhe o contexto: diagnóstico, configurações, sessão pendente,
+   ajuda, atalhos ou comandos de tela. O texto ditado permanece literal.
+5. A interface separa estado operacional de mensagem e orientação. Silêncio,
+   transcrição vazia e frase desconhecida recebem feedback e uma nova captura.
+6. Cliques, digitação, Enter e limpeza exigem confirmação e revalidam seus alvos.
+   Rolagem e atalhos explicitamente solicitados executam diretamente.
+7. O resultado permanece visível; a disponibilidade para uma nova ativação é
+   indicada separadamente quando microfone e reconhecimento estão prontos.
 
-Por trás da orquestração está um modelo de IA (LLM) responsável por interpretar a intenção por trás dos comandos de voz e traduzi-la em ações concretas no sistema operacional — não um conjunto fixo de comandos de sintaxe rígida.
+## Componentes e responsabilidades
 
-**Benchmark de referência:** Windows Voice Access. O diferencial do projeto é a compreensão de linguagem natural e comandos compostos (ex: *"abre o e-mail e responde pro João dizendo que vou chegar atrasado"*), em vez da sintaxe fixa do Voice Access (*"clique 7"*, *"role para baixo"*).
-
-## Como funciona (conceito)
-
-1. Usuário ativa o agente por voz (wake word) e fala um comando
-2. O agente transcreve a fala e interpreta a intenção
-3. Antes de agir, o agente **confirma por voz** o que entendeu
-4. Após confirmação, executa a ação (clique, digitação, abertura de app etc.)
-5. Um comando de emergência ("parar", "cancelar") interrompe qualquer ação a qualquer momento, com prioridade máxima
-
-## Arquitetura
-
-O sistema é dividido em duas camadas, porque containers Docker não têm acesso nativo a mouse, teclado e tela do Windows — isso exige um componente nativo no host com permissões reais de input, separado da camada de "inteligência", que pode ser containerizada.
-
-```
-┌─────────────────────────────┐        ┌──────────────────────────────┐
-│   HOST WINDOWS (nativo)     │        │   DOCKER (containers)         │
-│                              │        │                                │
-│  • Wake word + STT local    │◄──────►│  • Orquestrador / router      │
-│  • Percepção de tela         │        │  • LLM local (Ollama) [fase 2]│
-│    (UI Automation)           │        │  • Confirmação (TTS) + sessão │
-│  • Executor de ações         │        │                                │
-│    (clique, digitação, stop) │        └──────────────┬─────────────────┘
-└─────────────────────────────┘                       │
-                                                        ▼
-                                          ┌──────────────────────────┐
-                                          │   Claude API (nuvem)      │
-                                          │   comandos complexos      │
-                                          └──────────────────────────┘
-```
-
-| Serviço | Onde roda | Responsabilidade |
+| Componente | Local | Responsabilidade |
 |---|---|---|
-| Wake word + STT local | Host | Ativação por voz e transcrição, baixa latência |
-| Percepção de tela | Host | Lê a árvore de elementos clicáveis (UI Automation) |
-| Executor de ações | Host | Executa clique, digitação e o comando de parada de emergência |
-| Orquestrador / router | Docker | Decide entre regra determinística (rápida) ou LLM (nuvem/local) |
-| LLM local (Ollama) | Docker | Comandos simples e frequentes — **planejado para fase 2** |
-| Confirmação (TTS) + sessão | Docker | Pergunta antes de agir; guarda contexto e histórico (Redis) |
-| Claude API | Nuvem | Interpreta comandos complexos e ambíguos |
+| `wakeword` | Host | Microfone, wake word, VAD, transporte e eventos tipados |
+| `speakbar.interaction` | Host | Contexto de diálogo, roteamento e repetição de comandos desconhecidos |
+| `speakbar.commands` | Host | Vocabulário, normalização de comandos, ajuda e números dos ajustes |
+| Controladores Qt | Host | Ponte entre serviços, sessão e apresentação; agendamento de capturas |
+| Speakbar e configurações | Host | Estado e orientação visíveis; edição de rascunho e persistência explícita |
+| `screen_access` | Host | Sessão de escolha/confirmação, acompanhamento de foco e ações nativas |
+| API FastAPI | Docker | Proxy WebSocket e endpoints legados de transcrição em lote |
+| `realtime` | Docker | Whisper small, aquecimento e uma conexão de reconhecimento por vez |
+| Worker, Beat e Redis | Docker | Processamento e limpeza dos uploads do modo em lote |
 
-## Decisões de design
+A correspondência de nomes de controles mantém seu tratamento fonético próprio.
+Os módulos de diálogo não dependem de widgets. As referências nativas COM/AX e
+as operações sobre elas pertencem à thread do executor; áudio pertence à thread
+do serviço de voz. A thread gráfica não captura áudio nem executa inferência.
 
-- **Perfil de usuário do MVP:** ambos os perfis (deficiência parcial e total) atendidos desde o início
-- **Processamento de IA:** híbrido — caminho rápido local para comandos simples, nuvem (Claude API) para comandos complexos
-- **Tratamento de erro de interpretação:** confirmação por voz obrigatória antes de qualquer ação
+## Estados, recuperação e proteção contra respostas atrasadas
 
-## Escopo do MVP (3 meses)
+Eventos de voz mantêm identificador de interação, resultado final, motivo tipado
+quando aplicável e disponibilidade da captura. Motivos distinguem ausência de
+fala, transcrição vazia, conexão, microfone e preparação de modelos indisponíveis.
+O modelo de apresentação tem estado, mensagem, orientação e disponibilidade.
 
-**Entra:**
-- Windows 10/11, apenas português (PT-BR)
-- 3 apps-alvo: navegador (Chrome/Edge), Explorer, Notepad ou Word
-- ~20-30 comandos priorizados (abrir app, clicar, digitar, rolar, fechar, desfazer)
-- Confirmação por voz antes de agir + comando de emergência
-- Roteamento híbrido qualitativo: regras determinísticas (substituindo o LLM local por enquanto) + Claude API
+Cada etapa de escolha, confirmação ou ditado admite uma repetição no prazo
+original de 30 segundos. Ajuda não renova o prazo. Atalhos têm o mesmo limite
+para resolver sua frase. A espera por execução nativa tem prazo de 90 segundos.
+Troca de janela, mudança do alvo, cancelamento e expiração invalidam propostas.
+Ações enviadas não são repetidas automaticamente.
 
-**Fica para depois (fase 2):**
-- LLM local (Ollama)
-- Fallback de visão computacional para apps sem árvore de acessibilidade
-- Macros e perfis personalizados por usuário
-- Outros idiomas e outros sistemas operacionais
+Solicitações de captura verificam prontidão e aceitação do serviço. A geração do
+diálogo, o serviço de origem e o token da sessão impedem capturas obsoletas.
+Eventos de interações canceladas são descartados. Eventos válidos da mesma
+interação são processados em ordem, incluindo o resultado final seguido de
+prontidão, sem depender de o evento ainda ser o snapshot mais recente.
 
-## Equipe e recursos
+A recuperação de conexão espera 1, 2, 5, 10 e 15 segundos, mantendo 15 segundos
+nas falhas seguintes até uma interação bem-sucedida. O microfone selecionado é
+reaberto a cada 5 segundos, sem substituição automática por outro dispositivo.
+Preparação de modelos com falha também é repetida a cada 5 segundos.
+O encerramento interrompe as esperas. Os logs adicionais registram estados,
+motivos, identificadores e durações, sem texto reconhecido ou ditado.
 
-- **Time:** pequeno, de 3 a 5 pessoas
-- **Dedicação:** fins de semana e horas livres (part-time)
-- **Orçamento:** limitado — poucos dólares por mês, concentrado na API da Claude (o diferencial de compreensão de linguagem natural do produto)
+## Configurações e dados
 
-## Cronograma resumido (12 fins de semana)
+A rolagem vertical no Windows utiliza `ScrollPattern`, preservando o alvo na thread
+do executor. A região rolável mais próxima do foco é priorizada; ambiguidades são
+resolvidas por números. Os movimentos pequeno, normal e página usam aproximadamente
+15%, 50% e 90% do viewport, ou o incremento nativo quando essas métricas não existem.
+Não há fallback por mouse/teclado nem repetição automática de ações.
 
-| Mês | Foco | Marco |
-|---|---|---|
-| 1 | Fundação: wake word, STT local, UI Automation, executor, conexão host↔orquestrador | Loop básico com 5 comandos fixos, sem IA nem confirmação |
-| 2 | Inteligência: integração com Claude API, confirmação por voz, sessão/Redis, comando de emergência | Loop completo com confirmação, fallback de LLM e parada de emergência |
-| 3 | Consolidação: docker-compose, empacotamento do host agent, testes com usuários reais, documentação | MVP validado com usuários reais nos 3 apps-alvo |
+Quando existem métricas de posição e viewport, `SetScrollPercent` recebe posições
+intermediárias com interpolação suave a até 30 passos por segundo, durante 0,45 s,
+0,75 s ou 1,1 s conforme a intensidade. A distância final é preservada e cada passo
+revalida janela e área, permitindo interromper a animação. Todo o trabalho permanece
+na thread do executor. Provedores que só oferecem incrementos nativos mantêm esse
+comportamento, sem simular uma precisão que não disponibilizam.
 
-## Principais riscos
+Após cada movimento, uma captura com espera inicial de cinco segundos aceita
+“mais”, troca de direção, nova intensidade ou cancelamento. Silêncio encerra
+normalmente. O tempo é específico da captura e não altera preferências globais.
+Números de controles visíveis são descartados e relidos após rolar. A referência
+de rolagem é separada do snapshot desses controles. Mudança de janela encerra a
+sessão; cada movimento revalida área, janela, identidade, geometria e disponibilidade.
 
-- **Latência ponta a ponta** entre falar e a ação acontecer
-- **Precisão do STT em PT-BR** com fala atípica (deficiências motoras que coexistem com dificuldades de fala)
-- **Cobertura limitada da UI Automation** em apps sem árvore de acessibilidade completa
-- **Fadiga de confirmação** em sequências longas de comandos
-- **Scope creep** — risco elevado em time part-time de fim de semana; a lista de itens "fica para depois" deve ser tratada como compromisso do time
+Com o menu aberto, comandos externos ficam bloqueados. A voz permite navegar
+entre seções, consultar ajuda, ajustar aparência e tempos, salvar ou descartar.
+Microfone e atalhos continuam selecionados/cadastrados no formulário. Testes de
+transcrição são isolados: nenhuma frase do diagnóstico executa comandos.
 
-## Critério de sucesso do MVP
+Preferências e atalhos usam o arquivo local versionado `settings.json`, com
+gravação atômica e preservação de arquivos inválidos. Aparência é aplicada ao
+salvar; mudanças de áudio reiniciam o serviço após liberar o dispositivo.
 
-Um usuário com deficiência motora consegue, só de voz, abrir o navegador, navegar até um site, digitar uma busca e fechar o app — com confirmação em cada passo e possibilidade de cancelar/parar a qualquer momento — nos 3 apps-alvo, com latência aceitável e sem travar.
+No streaming, o áudio permanece em memória; não são criados WAVs nem uploads
+persistentes. No modo legado `batch`, o host cria WAVs em `recordings/` e a API
+salva uploads no volume compartilhado. A limpeza periódica do servidor usa a
+retenção configurada (padrão de 24 horas); os WAVs normais do host não têm essa
+limpeza automática. O diagnóstico em lote remove seu WAV temporário. Resultados
+de tarefas em lote também passam pelo backend Celery/Redis.
+O modo headless continua voltado à transcrição no terminal, usando o ambiente.
+
+## Limitações e evolução futura
+
+- O controle nativo utiliza UI Automation no Windows; o contrato macOS tem
+  implementação e testes simulados. No Linux, acesso à tela não está implementado.
+- Aplicativos sem controles acessíveis ou com privilégios diferentes podem recusar
+  operações. Não há fallback por coordenadas ou visão computacional.
+- “Parar” por voz depende da captura e transcrição. O botão cancela a interação
+  local imediatamente; uma ação nativa já enviada pode terminar depois disso.
+- Criação completa de atalhos e seleção de microfone por voz ficam para outra etapa.
+- LLM, comandos compostos, rolagem contínua/horizontal, gerenciamento de janelas, envio guiado de e-mails,
+  TTS e reconhecimento independente de emergência não fazem parte desta entrega.
+
+## Validação
+
+A suíte `python -m unittest discover -s tests -v` cobre contratos de voz, sessão,
+roteamento, recuperação, apresentação e configurações. Os scripts explícitos
+`screen_native_check.py` e `settings_native_check.py` verificam integração nativa
+no Windows. `scroll_native_check.py` verifica rolagem em duas áreas Win32 isoladas.
+As prévias `interaction_visual_check.py` e `settings_visual_check.py`
+renderizam a interface em 100%, 125% e 150%, sem Whisper ou ações externas.
+O teste nativo de configurações usa áudio real e comandos simulados, sem Whisper.
+Reconhecimento com fala real deve ser validado separadamente nos aplicativos-alvo.

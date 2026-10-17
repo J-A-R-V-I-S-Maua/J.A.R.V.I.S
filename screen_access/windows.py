@@ -4,9 +4,10 @@ import os
 import uuid
 from .backend import Backend, Element, Snapshot, ScreenError, Window, intersection
 from .shell import DESKTOP_CLASSES, TASKBAR_CLASSES
+from .scroll import WindowsScrollMixin
 
 
-class WindowsBackend(Backend):
+class WindowsBackend(WindowsScrollMixin, Backend):
     def __init__(self, api=None):
         super().__init__()
         self.native = api is None
@@ -18,6 +19,7 @@ class WindowsBackend(Backend):
         self.context = None
         self.tracker = None
         self.last_field = None
+        self.last_scroll_focus = None
         self._node_windows = {}
         self._element_windows = {}
 
@@ -36,6 +38,7 @@ class WindowsBackend(Backend):
     def __exit__(self, *args):
         super().__exit__(*args)
         self.last_field = None
+        self.last_scroll_focus = None
         self._node_windows.clear()
         self._element_windows.clear()
         if self.tracker:
@@ -166,6 +169,7 @@ class WindowsBackend(Backend):
         control = self.api.GetFocusedControl()
         if control is None or control.ProcessId == os.getpid():
             return  # A speakbar não substitui o último campo externo.
+        self.last_scroll_focus = (window.identity, control) if self.belongs_to(control, window) else None
         self.last_field = None
         if self.editable(control) and self.belongs_to(control, window):
             self.last_field = (window.identity, control, self.describe(control, window.frame))

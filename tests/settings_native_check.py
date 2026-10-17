@@ -40,11 +40,14 @@ def main():
             print(message, flush=True)
             bar.quit()
 
-        def command():
+        def publish_command(phrase):
             service = controller.thread.service
             service._interaction_id += 1
             service._publish(State.LISTENING)
-            service._publish(State.RESULT, "Abra as configurações")
+            service._publish(State.RESULT, phrase)
+
+        def command():
+            publish_command("Abra as configurações")
             QTimer.singleShot(250, inspect)
 
         def inspect():
@@ -60,7 +63,25 @@ def main():
                 fail("Falha: janela duplicada.")
                 return
             print(f"Captura ativa: {controller.thread.isRunning()}, dispositivos: {len(controller.audio_devices)}, abertura: OK", flush=True)
-            dialog.reject()
+            publish_command("tamanho do texto vinte e dois")
+            QTimer.singleShot(100, inspect_adjustment)
+
+        def inspect_adjustment():
+            dialog = bar._settings_dialog
+            if dialog is None or dialog.text_size.value() != 22:
+                fail("Falha: ajuste de rascunho por voz.")
+                return
+            if controller.preferences.path.exists():
+                fail("Falha: ajuste foi salvo sem pedir.")
+                return
+            publish_command("fechar configurações")
+            QTimer.singleShot(100, inspect_closed)
+
+        def inspect_closed():
+            if controller.settings_open or bar._settings_dialog is not None:
+                fail("Falha: fechar configurações por voz.")
+                return
+            print("Rascunho e fechamento por voz: OK", flush=True)
             outcome["cycles"] += 1
             if outcome["cycles"] < 3:
                 QTimer.singleShot(200, command)

@@ -1,5 +1,6 @@
 """Captura/VAD no host e transcrição da fala completa no backend."""
 from collections import deque
+from dataclasses import replace
 import logging
 import math
 import time
@@ -7,7 +8,7 @@ import time
 import numpy as np
 
 from .detect_microphone_service import CHUNK, RATE, VoiceService, _read_chunk
-from .events import Cancelled, State, check_cancelled
+from .events import Cancelled, State, Reason, check_cancelled
 from .speech_gate import SpeechConfig, SpeechGate
 from .streaming_client import StreamingClient
 from .transcription_client import TranscriptionError
@@ -37,23 +38,13 @@ class StreamingVoiceService(VoiceService):
             self.connection.check()
 
     def _prepare_connection(self):
-        # A inferência cancelada pode ainda estar liberando a capacidade do backend.
-        deadline = time.monotonic() + 15
-        while True:
-            check_cancelled(self.stop_requested.is_set)
-            self.connection = self.stream_factory()
-            try:
-                self.connection.prepare(self.stop_requested.is_set)
-                return
-            except TranscriptionError:
-                self.connection.close()
-                self.connection = None
-                if time.monotonic() >= deadline:
-                    raise
-                self.stop_requested.wait(0.25)
+        check_cancelled(self.stop_requested.is_set)
+        self.connection = self.stream_factory()
+        self.connection.prepare(self.stop_requested.is_set)
 
     def _stream_audio(self, stream, audio, interaction_id):
-        gate = SpeechGate(self.speech_config)
+        config = replace(self.speech_config, start_timeout=self.current_start_timeout) if self.current_start_timeout else self.speech_config
+        gate = SpeechGate(config)
         self.vad.reset_states()
         self.connection.begin(interaction_id)
         # Preservar sons baixos antes de o VAD confirmar o início da fala.
@@ -84,12 +75,15 @@ class StreamingVoiceService(VoiceService):
 
     def run(self):
         model = None
+        connection_failures = 0
         try:
             while not self.stop_requested.is_set():
+                phase_reason = Reason.MODEL
                 try:
                     if self.devices_requested.is_set():
                         self._enumerate_devices()
                     if self.paused.is_set() and time.monotonic() < self.audio_test_until:
+                        phase_reason = Reason.MICROPHONE
                         self._meter_only()
                         continue
                     if model is None or self.vad is None:
@@ -97,34 +91,46 @@ class StreamingVoiceService(VoiceService):
                         self.speech_config = self.speech_config or SpeechConfig.from_environment()
                         model = self.model_factory(self.stop_requested.is_set)
                         self.vad = self.vad_factory(self.stop_requested.is_set)
-                    self._prepare_connection()
+                    try:
+                        self._prepare_connection()
+                    except TranscriptionError:
+                        if self.connection:
+                            self.connection.close()
+                            self.connection = None
+                        self._recover(Reason.CONNECTION, connection_failures)
+                        connection_failures += 1
+                        continue
                     check_cancelled(self.stop_requested.is_set)
                     self.cancel_requested.clear()
+                    phase_reason = Reason.MICROPHONE
                     _, interaction_id = self._capture(model, capture=self._stream_audio)
                     result = self.connection.finish(self.cancel_requested.is_set)
+                    connection_failures = 0
                     self._publish(State.RESULT if result.text else State.ERROR,
                                   result.text or "Nenhuma fala reconhecida. Tente novamente.",
                                   interaction_id=interaction_id, sequence=self.connection.sequence,
-                                  is_final=bool(result.text))
+                                  is_final=bool(result.text), reason=None if result.text else Reason.EMPTY_TRANSCRIPT)
                 except Cancelled:
                     if self.stop_requested.is_set():
                         break
                     # _capture publica IDLE somente após preparar a próxima conexão
                     # e reabrir o microfone. Até lá, preservar CANCELLING.
                 except NoSpeech as exc:
-                    self._publish(State.ERROR, str(exc))
+                    self._publish(State.ERROR, str(exc), reason=Reason.NO_SPEECH)
                 except Exception as exc:
                     if self.stop_requested.is_set():
                         break
                     logging.exception("Falha no streaming")
                     message = str(exc) if isinstance(exc, (TranscriptionError, ValueError)) else (
                         "Falha no microfone ou reconhecimento. Verifique o dispositivo e tente novamente.")
-                    self._publish(State.ERROR, message)
+                    reason = Reason.CONNECTION if isinstance(exc, TranscriptionError) else phase_reason
+                    self._publish(State.ERROR, message, reason=reason)
                     if self.connection:
                         self.connection.close()
                         self.connection = None
-                    self._wait_for_retry()
-                    self._publish(State.PREPARING)
+                    self._recover(reason, connection_failures)
+                    if reason is Reason.CONNECTION:
+                        connection_failures += 1
                 finally:
                     if self.connection:
                         self.connection.close()

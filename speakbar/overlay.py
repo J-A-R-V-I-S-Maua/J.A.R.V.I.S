@@ -55,7 +55,7 @@ def monitor_for_screen(name, logical, ratio, monitors):
 
 
 class MarkerWindow(QWidget):
-    def __init__(self, screen, number_size=14, high_contrast=False):
+    def __init__(self, screen, number_size=12, high_contrast=False):
         super().__init__()
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                             | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus
@@ -80,18 +80,24 @@ class MarkerWindow(QWidget):
         occupied = []
         for number, frame in self.markers:
             x, y, width, height = frame
-            painter.setPen(QPen(QColor("#111111" if self.high_contrast else "#005ea8"), 2))
+            outline = QColor("#111111" if self.high_contrast else "#005ea8")
+            if not self.high_contrast:
+                outline.setAlpha(190)
+            painter.setPen(QPen(outline, 1.25))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(QRectF(x, y, width, height), 3, 3)
-            badge_width = max(36, painter.fontMetrics().horizontalAdvance(str(number)) + 12)
-            badge_height = max(24, self.number_size + 10)
+            badge_width = max(22, painter.fontMetrics().horizontalAdvance(str(number)) + 8)
+            badge_height = max(18, painter.fontMetrics().height() + 4)
             badge = QRectF(max(0, min(x, self.width()-badge_width)), max(0, min(y, self.height()-badge_height)), badge_width, badge_height)
             while any(badge.intersects(previous) for previous in occupied) and badge.bottom()+badge_height+1 < self.height():
                 badge.translate(0, badge_height+1)
             occupied.append(QRectF(badge))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("black" if self.high_contrast else "#005ea8"))
-            painter.drawRoundedRect(badge, 5, 5)
+            background = QColor("black" if self.high_contrast else "#005ea8")
+            if not self.high_contrast:
+                background.setAlpha(160)
+            painter.setBrush(background)
+            painter.drawRoundedRect(badge, 4, 4)
             painter.setPen(QColor("white"))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(number))
 
@@ -99,7 +105,7 @@ class MarkerWindow(QWidget):
 class NumberOverlay:
     def __init__(self):
         self.windows = []
-        self.number_size = 14
+        self.number_size = 12
         self.high_contrast = False
 
     def clear(self):

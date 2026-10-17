@@ -57,6 +57,8 @@ class Backend:
         self.references = {}
         self.snapshot = None
         self.require_foreground = True
+        self.scroll_references = {}
+        self.scroll_snapshot = None
 
     def __enter__(self):
         return self
@@ -64,6 +66,8 @@ class Backend:
     def __exit__(self, *args):
         self.references.clear()
         self.snapshot = None
+        self.scroll_references.clear()
+        self.scroll_snapshot = None
 
     def scan(self, window, max_depth=32, max_elements=3000, include_hidden=False, cancelled=lambda: False):
         if max_depth < 0 or max_elements < 1:
@@ -145,6 +149,12 @@ class Backend:
 
     def clear_text(self, snapshot, number=1, cancelled=lambda: False):
         raise ScreenError("Limpeza do campo ativo indisponível neste sistema.")
+
+    def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
+        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+
+    def scroll(self, snapshot, number, request, cancelled=lambda: False):
+        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
 
 
 def get_backend():

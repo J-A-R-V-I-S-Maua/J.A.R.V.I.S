@@ -80,6 +80,9 @@ class SessionTest(unittest.TestCase):
     def test_invalid_reply_cancels_without_action(self):
         self.read("clique em pesquisar")
         self.session.handle("talvez")
+        self.assertTrue(self.session.active)
+        self.assertTrue(self.views[-1].capture)
+        self.session.handle("talvez")
         self.assertFalse(self.session.active)
         self.assertEqual(self.executor.submit.call_count, 1)
         self.assertEqual(self.views[-1].markers, ())
@@ -217,6 +220,9 @@ class SessionTest(unittest.TestCase):
             count = self.executor.submit.call_count
             token = self.session.token
             self.session.handle(response)
+            if response == "talvez":
+                self.assertTrue(self.session.active)
+                self.session.handle(response)
             self.assertFalse(self.session.active)
             self.assertEqual(self.executor.submit.call_count, count)
             self.session.receive(token, "prepare_dictation", self.snapshot)
@@ -233,6 +239,8 @@ class SessionTest(unittest.TestCase):
 
     def test_ambiguous_invalid_number_and_no_match(self):
         self.read("clique em mais ações")
+        self.session.handle("um")
+        self.assertTrue(self.session.active)
         self.session.handle("um")
         self.assertFalse(self.session.active)
         self.session.begin_capture()

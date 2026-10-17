@@ -1,4 +1,5 @@
 import argparse
+import logging
 import signal
 import sys
 
@@ -9,6 +10,7 @@ from .window import Speakbar
 
 
 def main(argv=None):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Speakbar do J.A.R.V.I.S.")
     parser.add_argument("--demo", action="store_true", help="Demonstração sem microfone ou API")
     args = parser.parse_args(argv)
