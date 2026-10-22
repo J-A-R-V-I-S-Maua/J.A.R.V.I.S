@@ -99,7 +99,7 @@ basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
 
-### Rolagem por voz (Windows)
+### Rolagem por voz (Windows e macOS)
 
 Diga **Hey Jarvis** e **“role para baixo”** ou **“role para cima”**. A rolagem é
 executada diretamente, sem confirmação. Também aceita “rolar para baixo”, “descer
@@ -143,7 +143,8 @@ para escolher um controle (a ação ainda exige confirmação), ou continue rola
 Uma confirmação pendente precisa ser concluída ou cancelada antes de rolar.
 Durante ditado, “role para baixo” é texto literal. Trocar de janela encerra a sessão.
 
-O suporte usa `ScrollPattern` do UI Automation, sem roda do mouse ou teclas como
+O suporte usa `ScrollPattern` do UI Automation no Windows e, no macOS, o valor da
+barra `AXVerticalScrollBar` de cada `AXScrollArea`, sem roda do mouse ou teclas como
 fallback. Aplicativos que não expõem esse padrão, incluindo alguns componentes Qt,
 informam indisponibilidade. A versão atual não inclui rolagem horizontal nem contínua.
 O teste isolado `.venv\Scripts\python.exe tests/scroll_native_check.py` verifica
@@ -159,6 +160,20 @@ não é necessário reconstruir os containers para esta integração. No PowerSh
 .venv\Scripts\python.exe main.py
 ```
 
+No macOS (Terminal, dentro da raiz do projeto):
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py
+```
+
+Na primeira execução, o macOS pede para autorizar **Acessibilidade** ao aplicativo que
+executa o Python (Terminal, iTerm ou o editor). Autorize em **Ajustes do Sistema >
+Privacidade e Segurança > Acessibilidade** e reinicie o J.A.R.V.I.S.; o microfone também
+precisa ser autorizado para esse aplicativo. A speakbar e os números continuam visíveis
+quando outro aplicativo está ativo. Clicar na barra não troca o alvo: a última janela
+externa continua sendo usada.
+
 Feche a instância antiga da barra antes de iniciar a atualizada. Mantenha o aplicativo
 que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da barra):
 
@@ -166,10 +181,12 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   automaticamente. Responda **“sete”**, **“número sete”** ou **“clique no número sete”**.
 - **“Clique em pesquisar”**: compara o nome com os controles da janela. Se houver
   vários candidatos, mostra seus números e pede uma escolha.
-- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows):
-  solicita a abertura padrão de um item ou atalho pela ação nativa `Invoke`.
+- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows e macOS):
+  solicita a abertura padrão de um item ou atalho pela ação nativa `Invoke` (Windows)
+  ou `AXOpen` (macOS).
   A abertura é solicitada uma única vez. Itens sem essa ação informam indisponibilidade.
-- **“Abrir menu de contexto da Lixeira”** (Windows): equivalente ao botão direito.
+- **“Abrir menu de contexto da Lixeira”** (Windows e macOS): equivalente ao botão direito.
+  No macOS, usa a ação `AXShowMenu` do próprio controle, sem atalho de teclado.
   Também aceita **“clique com o botão direito no número sete”**. A barra identifica
   o controle e pede confirmação; então devolve o foco e envia **Shift+F10**, o
   [atalho do Windows para o menu de contexto](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu).
@@ -180,15 +197,15 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   **“não”** ou **“parar”** para abandonar a proposta. Não é necessário repetir a wake word.
 - **“Esconder números”** remove os marcadores. O botão da barra também cancela uma
   sessão pendente. Cada escolha exige sua própria confirmação.
-- **“Digitar olá, mundo”** (Windows): dê foco ao campo desejado e fale o comando.
+- **“Digitar olá, mundo”** (Windows e macOS): dê foco ao campo desejado e fale o comando.
   A barra mostra o texto reconhecido e pede **“confirmar”** antes de inseri-lo.
-- **“Digitar”** (Windows): a barra abre uma captura para o texto e, em seguida,
+- **“Digitar”** (Windows e macOS): a barra abre uma captura para o texto e, em seguida,
   outra para confirmação. Não é necessário repetir a wake word nessas respostas.
   O campo pode ter sido selecionado diretamente ou com **“clique em pesquisar”**.
-- **“Enter”** (Windows): pede confirmação e envia Enter ao campo de texto ativo.
+- **“Enter”** (Windows e macOS): pede confirmação e envia Enter ao campo de texto ativo.
   Em campos de pesquisa, executa o comportamento de pesquisa do aplicativo; em
   editores de várias linhas, pode inserir uma nova linha. Também aceita **“pressionar enter”**.
-- **“Deletar”** (Windows): pede confirmação e apaga **todo o conteúdo do campo ativo**,
+- **“Deletar”** (Windows e macOS): pede confirmação e apaga **todo o conteúdo do campo ativo**,
   incluindo texto que já existia antes da última ditagem. Também aceita **“limpar campo”**
   e **“apagar tudo”**. Sem campo editável ativo, solicita que você selecione um.
 
@@ -209,7 +226,9 @@ Para pesquisar por voz: selecione o campo, diga **“digitar previsão do tempo�
 comandos preservam o campo externo quando a speakbar recebe foco e revalidam o alvo
 antes da ação. Durante a captura do texto de “digitar”, Enter e Deletar são tratados
 como palavras a inserir. A limpeza usa `ValuePattern.SetValue("")` quando disponível,
-ou Ctrl+A e Backspace no editor validado quando só há suporte de texto.
+ou Ctrl+A e Backspace no editor validado quando só há suporte de texto. No macOS, o
+texto é enviado por eventos Quartz Unicode, o campo recebe `AXValue` vazio na limpeza
+(ou Cmd+A e Delete) e o aplicativo alvo é trazido para a frente antes de qualquer tecla.
 
 O alvo é a última janela externa em foco, preservada quando o botão da speakbar recebe
 foco. No Windows, eventos de mudança de foco são acompanhados na thread do backend,
@@ -268,7 +287,9 @@ ao iniciar com `--force-renderer-accessibility`, conforme a
 [documentação do Chromium](https://www.chromium.org/developers/design-documents/accessibility/).
 Não é necessário esse ajuste para páginas que já expõem os controles. Variáveis
 `SCREEN_MAX_*` configuradas anteriormente continuam prevalecendo sobre os novos padrões.
-No macOS, autorize Acessibilidade para o aplicativo que executa o Python. O Linux
+No macOS, a leitura usa a AX API: botões, links, caixas, menus e campos de texto, além
+de linhas de listas e tabelas (seleção por `AXSelected`). Em navegadores Chromium, o
+J.A.R.V.I.S. pede ao app que exponha a página (`AXManualAccessibility`). O Linux
 mantém a transcrição, mas o acesso à tela não está implementado.
 
 Para inspecionar a janela sem microfone, use o módulo independente:
@@ -298,7 +319,8 @@ após confirmação. A abertura de itens é verificada com padrões simulados; a
 nativa confirma a disponibilidade de `Invoke` nos ícones do desktop sem abri-los.
 Os testes também cobrem o contrato macOS com APIs
 simuladas e coordenadas em 100%, 125%, 150% e monitores com origem negativa.
-A validação nativa macOS exige uma máquina macOS. Para validar com sua voz, repita o
+A validação nativa macOS exige uma máquina macOS com permissão de Acessibilidade;
+teste no Finder, Safari/Chrome, Notas e Ajustes do Sistema. Para validar com sua voz, repita o
 fluxo de mostrar números, escolher, confirmar e cancelar em Chrome/Edge, Explorer e
 Bloco de Notas; verifique especialmente nomes duplicados e mudança de janela durante a confirmação.
 
@@ -307,7 +329,7 @@ Bloco de Notas; verifique especialmente nomes duplicados e mudança de janela du
 Abra pela engrenagem da speakbar, pelo menu do ícone da bandeja ou com:
 **“Hey Jarvis” → “Abra as configurações”**. Também aceita “abrir configurações” e
 “abra as configurações do Jarvis”. Esse comando abre o menu do J.A.R.V.I.S.; as
-configurações do Windows são um destino separado no cadastro de atalhos.
+configurações do Windows e os Ajustes do macOS são destinos separados no cadastro de atalhos.
 
 O menu tem quatro seções: **Atalhos**, **Voz e microfone**, **Aparência e acessibilidade**
 e **Ajuda e diagnóstico**. Enquanto estiver aberto, comandos para aplicativos externos
@@ -332,8 +354,10 @@ os comandos. Durante um teste de transcrição, até “salvar configurações�
 texto de diagnóstico e não executa nenhuma ação.
 
 Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site,
-aplicativo `.exe` ou atalho `.lnk`, pasta ou recurso do Windows (Explorador,
-Configurações, Rede ou Som). Os exemplos apenas preenchem o formulário; clique em
+aplicativo (`.app` no macOS; `.exe` ou atalho `.lnk` no Windows), pasta ou recurso do
+sistema: no Windows, Explorador, Configurações, Rede ou Som; no macOS, Finder, Ajustes do
+Sistema, Rede ou Som. No macOS, a abertura usa `/usr/bin/open` com argumentos separados,
+sem shell. Atalhos de recursos do outro sistema continuam no cadastro, mas não abrem. Os exemplos apenas preenchem o formulário; clique em
 **Salvar** para cadastrar. **Adicionar / atualizar** permite organizar vários
 cadastros antes de salvar. **Cancelar** descarta o rascunho. **Testar abertura** abre
 explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocorre.
@@ -370,7 +394,7 @@ Salvar aplica a aparência e os limites de tela. Mudanças de áudio reiniciam a
 serviço de voz, após liberar o dispositivo. Ao sair, a posição da barra é salva quando
 a opção está ativada, e ajustada para um monitor disponível na próxima abertura.
 O modo headless continua usando o ambiente. Containers e configuração do Whisper
-não são alterados. Os destinos locais e o catálogo do sistema são priorizados para Windows.
+não são alterados. No macOS, o `settings.json` fica em `~/Library/Preferences/J.A.R.V.I.S. Speakbar`.
 
 ### Configuração e modo anterior
 

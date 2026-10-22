@@ -1,12 +1,13 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from PySide6.QtWidgets import QApplication
 from speakbar.preferences import PreferencesService
-from speakbar.shortcuts import ShortcutService, ShortcutConversation, validate_shortcuts, normalize
+from speakbar.shortcuts import ShortcutService, ShortcutConversation, validate_shortcut, validate_shortcuts, normalize
 from speakbar.controller import VoiceController, DemoController
 from speakbar.settings_window import SettingsWindow
 from wakeword.detect_microphone_service import VoiceService
@@ -17,6 +18,10 @@ APP = QApplication.instance() or QApplication([])
 
 def shortcut(phrase="abrir YouTube", destination="youtube.com", kind="site"):
     return dict(id="one", name="YouTube", phrase=phrase, kind=kind, destination=destination, enabled=True)
+
+
+def mac_shortcut(phrase, destination, kind, key):
+    return dict(id=key, name=key, phrase=phrase, kind=kind, destination=destination, enabled=True)
 
 
 class SettingsDomainTest(unittest.TestCase):
@@ -88,13 +93,65 @@ class SettingsDomainTest(unittest.TestCase):
                  dict(shortcut("abrir pasta", self.temp.name, "folder"), id="three"),
                  dict(shortcut("abrir Windows", "settings", "windows"), id="four")]
         validated = validate_shortcuts(items)
-        with patch("speakbar.shortcuts.QDesktopServices.openUrl", return_value=True) as web, patch("speakbar.shortcuts.os.startfile", create=True) as local:
+        with patch("speakbar.shortcuts.QDesktopServices.openUrl", return_value=True) as web, \
+                patch("speakbar.shortcuts.os.startfile", create=True) as local, patch("speakbar.shortcuts.sys.platform", "win32"):
             service = ShortcutService(validated)
             for item in validated:
                 service.execute(item)
             self.assertEqual(web.call_count, 1)
             self.assertEqual(local.call_count, 3)
             local.assert_called_with("ms-settings:")
+
+
+class MacOSShortcutTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.app = Path(self.temp.name) / "Notas.app"
+
+    def test_app_bundle_is_a_directory_and_resources_are_typed(self):
+        with self.assertRaises(ValueError):
+            validate_shortcut(mac_shortcut("abrir notas", str(self.app), "application", "one"))
+        self.app.mkdir()
+        validate_shortcut(mac_shortcut("abrir notas", str(self.app), "application", "one"))
+        validate_shortcut(mac_shortcut("abrir som", "sound", "macos", "two"))
+        for item in (mac_shortcut("abrir som", "explorer", "macos", "three"),
+                     mac_shortcut("abrir notas", str(Path(self.temp.name) / "Notas.dmg"), "application", "four")):
+            with self.assertRaises(ValueError):
+                validate_shortcut(item, check_destination=False)
+
+    def test_open_receives_arguments_without_shell(self):
+        self.app.mkdir()
+        items = validate_shortcuts([mac_shortcut("abrir notas", str(self.app), "application", "one"),
+                                    mac_shortcut("abrir pasta", self.temp.name, "folder", "two"),
+                                    mac_shortcut("abrir finder", "finder", "macos", "three"),
+                                    mac_shortcut("abrir rede", "network", "macos", "four")])
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with patch("speakbar.shortcuts.sys.platform", "darwin"), \
+                patch("speakbar.shortcuts.subprocess.run", return_value=done) as run:
+            service = ShortcutService(items)
+            for item in items:
+                service.execute(item)
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            ["/usr/bin/open", str(self.app)], ["/usr/bin/open", self.temp.name],
+            ["/usr/bin/open", "-b", "com.apple.finder"],
+            ["/usr/bin/open", "x-apple.systempreferences:com.apple.Network-Settings.extension"]])
+        self.assertTrue(all("shell" not in call.kwargs for call in run.call_args_list))
+
+    def test_failures_and_other_system_resources_are_reported(self):
+        failed = subprocess.CompletedProcess([], 1, "", "Unable to find application")
+        with patch("speakbar.shortcuts.sys.platform", "darwin"), \
+                patch("speakbar.shortcuts.subprocess.run", return_value=failed) as run:
+            service = ShortcutService()
+            with self.assertRaisesRegex(ValueError, "Unable to find application"):
+                service.execute(mac_shortcut("abrir som", "sound", "macos", "one"))
+            with self.assertRaisesRegex(ValueError, "somente no Windows"):
+                service.execute(mac_shortcut("abrir windows", "settings", "windows", "two"))
+        self.assertEqual(run.call_count, 1)
+        with patch("speakbar.shortcuts.sys.platform", "win32"):
+            with self.assertRaisesRegex(ValueError, "somente no macOS"):
+                ShortcutService().execute(mac_shortcut("abrir som", "sound", "macos", "three"))
+
 
 
 class SettingsConversationTest(unittest.TestCase):

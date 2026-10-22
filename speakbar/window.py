@@ -140,6 +140,8 @@ class Speakbar(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # Sem isso, no macOS a barra some quando outro app fica ativo.
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setWindowIcon(make_icon())
         self._drag_offset = None
         self.controller = controller or (DemoController(self) if demo else VoiceController(self))

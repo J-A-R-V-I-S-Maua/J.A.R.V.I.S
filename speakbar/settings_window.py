@@ -1,6 +1,7 @@
 """Editor de preferências e atalhos; toda alteração é um rascunho até Salvar."""
 import copy
 import os
+import sys
 import uuid
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
@@ -8,7 +9,15 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QF
                                QProgressBar, QPushButton, QScrollArea, QSpinBox,
                                QStackedWidget, QTextBrowser, QVBoxLayout, QWidget)
 from .preferences import defaults, validate_preferences
-from .shortcuts import WINDOWS_RESOURCES, validate_shortcut, validate_shortcuts
+from .shortcuts import SYSTEM_KIND, SYSTEM_RESOURCES, validate_shortcut, validate_shortcuts
+
+SYSTEM_KIND_LABELS = {"windows": "Recurso do Windows", "macos": "Recurso do macOS"}
+TEMPLATES = {
+    "windows": (("Explorador", "Explorador", "abrir Explorador", "explorer"),
+                ("Configurações", "Configurações do Windows", "abrir configurações do Windows", "settings")),
+    "macos": (("Finder", "Finder", "abrir Finder", "finder"),
+              ("Ajustes do Sistema", "Ajustes do Sistema", "abrir ajustes do sistema", "settings")),
+}
 from .settings_style import STYLE, HIGH_CONTRAST
 from .commands import settings_command, all_help
 
@@ -201,13 +210,13 @@ class SettingsWindow(QDialog):
         self.phrase = QLineEdit()
         self.phrase.setPlaceholderText("Ex.: abrir YouTube")
         self.kind = QComboBox()
-        for label, value in (("Site", "site"), ("Aplicativo", "application"), ("Pasta", "folder"), ("Recurso do Windows", "windows")):
+        for label, value in (("Site", "site"), ("Aplicativo", "application"), ("Pasta", "folder"),
+                             (SYSTEM_KIND_LABELS[SYSTEM_KIND], SYSTEM_KIND)):
             self.kind.addItem(label, value)
         self.destination = QLineEdit()
         self.destination.setPlaceholderText("Ex.: youtube.com")
         self.resources = QComboBox()
-        for value, label in WINDOWS_RESOURCES.items():
-            self.resources.addItem(label, value)
+        self._fill_resources(SYSTEM_KIND)
         destination_box = QWidget()
         row = QHBoxLayout(destination_box)
         row.setContentsMargins(0, 0, 0, 0)
@@ -229,7 +238,7 @@ class SettingsWindow(QDialog):
         layout.addWidget(editor)
         layout.addWidget(QLabel("Preencher exemplo:"))
         templates = QGridLayout()
-        for index, key in enumerate(("YouTube", "Explorador", "Configurações")):
+        for index, key in enumerate(("YouTube",) + tuple(template[0] for template in TEMPLATES[SYSTEM_KIND])):
             button = QPushButton(key)
             button.setAutoDefault(False)
             button.clicked.connect(lambda checked=False, key=key: self._template(key))
@@ -372,10 +381,20 @@ class SettingsWindow(QDialog):
         if result["error"]:
             self.audio_status.setText(result["error"])
 
+    def _fill_resources(self, kind):
+        if self.resources.property("kind") == kind:
+            return
+        self.resources.clear()
+        for value, label in SYSTEM_RESOURCES[kind].items():
+            self.resources.addItem(label, value)
+        self.resources.setProperty("kind", kind)
+
     def _kind_changed(self):
         kind = self.kind.currentData()
-        self.destination.setVisible(kind != "windows")
-        self.resources.setVisible(kind == "windows")
+        if kind in SYSTEM_RESOURCES:
+            self._fill_resources(kind)
+        self.destination.setVisible(kind not in SYSTEM_RESOURCES)
+        self.resources.setVisible(kind in SYSTEM_RESOURCES)
         self.browse.setVisible(kind in ("application", "folder"))
 
     def _new_shortcut(self):
@@ -425,6 +444,8 @@ class SettingsWindow(QDialog):
         self.toggle_button.setEnabled(True)
         self.name.setText(item["name"])
         self.phrase.setText(item["phrase"])
+        if self.kind.findData(item["kind"]) < 0:
+            self.kind.addItem(SYSTEM_KIND_LABELS[item["kind"]], item["kind"])
         self.kind.setCurrentIndex(self.kind.findData(item["kind"]))
         self.destination.setText(item["destination"])
         self.resources.setCurrentIndex(max(0, self.resources.findData(item["destination"])))
@@ -433,7 +454,7 @@ class SettingsWindow(QDialog):
     def _form_shortcut(self):
         return validate_shortcut(dict(id=self.editing or uuid.uuid4().hex, name=self.name.text(),
                                       phrase=self.phrase.text(), kind=self.kind.currentData(),
-                                      destination=self.resources.currentData() if self.kind.currentData() == "windows" else self.destination.text(),
+                                      destination=self.resources.currentData() if self.kind.currentData() in SYSTEM_RESOURCES else self.destination.text(),
                                       enabled=self.enabled.isChecked()))
 
     def _put_shortcut(self):
@@ -464,22 +485,25 @@ class SettingsWindow(QDialog):
 
     def _template(self, key):
         self._new_shortcut()
-        self.name.setText(key)
-        self.phrase.setText("abrir " + key)
-        if key == "Configurações":
-            self.name.setText("Configurações do Windows")
-            self.phrase.setText("abrir configurações do Windows")
         if key == "YouTube":
+            self.name.setText(key)
+            self.phrase.setText("abrir " + key)
             self.destination.setText("https://youtube.com")
-        else:
-            self.kind.setCurrentIndex(self.kind.findData("windows"))
-            self.resources.setCurrentIndex(self.resources.findData("explorer" if key == "Explorador" else "settings"))
+            return
+        _, name, phrase, resource = next(template for template in TEMPLATES[SYSTEM_KIND] if template[0] == key)
+        self.name.setText(name)
+        self.phrase.setText(phrase)
+        self.kind.setCurrentIndex(self.kind.findData(SYSTEM_KIND))
+        self.resources.setCurrentIndex(self.resources.findData(resource))
 
     def _browse(self):
         if self.kind.currentData() == "folder":
             path = QFileDialog.getExistingDirectory(self, "Selecionar pasta")
         else:
-            path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo ou atalho", "", "Aplicativos (*.exe *.lnk)")
+            if sys.platform == "darwin":
+                path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo", "/Applications", "Aplicativos (*.app)")
+            else:
+                path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo ou atalho", "", "Aplicativos (*.exe *.lnk)")
         if path:
             self.destination.setText(path)
 

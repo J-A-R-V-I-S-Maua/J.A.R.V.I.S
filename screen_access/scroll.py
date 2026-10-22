@@ -52,7 +52,7 @@ def parse_scroll(text, previous=None):
     return None
 
 
-class WindowsScrollMixin:
+class ScrollMixin:
     def _check_scroll_window(self, window, cancelled):
         if cancelled():
             raise ScreenError("Rolagem cancelada.")
@@ -61,6 +61,82 @@ class WindowsScrollMixin:
                 (current is None or (current.identity, current.pid, current.frame) !=
                  (window.identity, window.pid, window.frame)))):
             raise ScreenError("A janela mudou. Rolagem encerrada.")
+
+    def _animate_scroll(self, snapshot, number, pattern, before, target, intensity, cancelled):
+        began = time.monotonic()
+        duration = SCROLL_DURATIONS[intensity]
+        next_frame = began + SCROLL_FRAME_SECONDS
+        while True:
+            # A espera é curta e ocorre apenas na thread do executor.
+            delay = min(next_frame, began + duration) - time.monotonic()
+            if delay > 0:
+                time.sleep(min(delay, SCROLL_FRAME_SECONDS))
+            self._validate_scroll_area(snapshot, number, cancelled)
+            progress = min(1., max(0., (time.monotonic() - began) / duration))
+            # Smoothstep: parte devagar, acelera no meio e desacelera ao chegar.
+            eased = progress * progress * (3 - 2 * progress)
+            position = target if progress >= 1 else before + (target - before) * eased
+            if not pattern.SetScrollPercent(-1, position, waitTime=0):
+                raise ScreenError("O aplicativo não confirmou a rolagem. Confira a tela antes de repetir.")
+            if progress >= 1:
+                return
+            # Chamadas nativas lentas não geram uma sequência de frames atrasados.
+            next_frame = time.monotonic() + SCROLL_FRAME_SECONDS
+
+    def scroll(self, snapshot, number, request, cancelled=lambda: False):
+        if request.direction not in ("up", "down") or request.intensity not in ("small", "normal", "page"):
+            raise ScreenError("Comando de rolagem inválido.")
+        native = self._validate_scroll_area(snapshot, number, cancelled)
+        try:
+            pattern = self.scroll_pattern(native)
+            if not pattern or not pattern.VerticallyScrollable:
+                raise ScreenError("Essa área não oferece rolagem vertical.")
+            before = float(pattern.VerticalScrollPercent)
+            view = float(pattern.VerticalViewSize)
+        except ScreenError:
+            raise
+        except Exception as exc:
+            raise ScreenError("A área rolável ficou indisponível. Repita o comando.") from exc
+        if request.direction == "up" and before == 0:
+            return ScrollOutcome.START
+        if request.direction == "down" and before == 100:
+            return ScrollOutcome.END
+        self._check_scroll_window(snapshot.window, cancelled)
+        if 0 <= before <= 100 and 0 < view < 100:
+            fraction = {"small": .15, "normal": .5, "page": .9}[request.intensity]
+            delta = 100 * view / (100 - view) * fraction
+            target = min(100, before + delta) if request.direction == "down" else max(0, before - delta)
+            self._animate_scroll(snapshot, number, pattern, before, target, request.intensity, cancelled)
+            accepted = True
+        else:
+            # O tamanho exato do incremento é definido pelo aplicativo.
+            amount = (1 if request.direction == "up" else 4) if request.intensity == "small" else (0 if request.direction == "up" else 3)
+            accepted = pattern.Scroll(2, amount, waitTime=0)
+        if not accepted:
+            raise ScreenError("O aplicativo não confirmou a rolagem. Confira a tela antes de repetir.")
+        deadline = time.monotonic() + .3
+        after = before
+        while time.monotonic() < deadline and not cancelled():
+            try:
+                after = float(pattern.VerticalScrollPercent)
+            except Exception:
+                break
+            if after != before:
+                break
+            time.sleep(.03)
+        if after == 0 and request.direction == "up":
+            return ScrollOutcome.START
+        if after == 100 and request.direction == "down":
+            return ScrollOutcome.END
+        if 0 <= before <= 100 and 0 <= after <= 100 and (after - before) * (1 if request.direction == "down" else -1) > 0:
+            return ScrollOutcome.MOVED
+        return ScrollOutcome.REQUESTED
+
+
+class WindowsScrollMixin(ScrollMixin):
+    @staticmethod
+    def scroll_pattern(native):
+        return native.GetPattern(10004)  # UIA_ScrollPatternId
 
     def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
         if max_depth < 0 or not 1 <= max_elements <= 10000:
@@ -142,73 +218,3 @@ class WindowsScrollMixin:
             raise
         except Exception as exc:
             raise ScreenError("A área rolável ficou indisponível. Repita o comando.") from exc
-
-    def _animate_scroll(self, snapshot, number, pattern, before, target, intensity, cancelled):
-        began = time.monotonic()
-        duration = SCROLL_DURATIONS[intensity]
-        next_frame = began + SCROLL_FRAME_SECONDS
-        while True:
-            # A espera é curta e ocorre apenas na thread do executor.
-            delay = min(next_frame, began + duration) - time.monotonic()
-            if delay > 0:
-                time.sleep(min(delay, SCROLL_FRAME_SECONDS))
-            self._validate_scroll_area(snapshot, number, cancelled)
-            progress = min(1., max(0., (time.monotonic() - began) / duration))
-            # Smoothstep: parte devagar, acelera no meio e desacelera ao chegar.
-            eased = progress * progress * (3 - 2 * progress)
-            position = target if progress >= 1 else before + (target - before) * eased
-            if not pattern.SetScrollPercent(-1, position, waitTime=0):
-                raise ScreenError("O aplicativo não confirmou a rolagem. Confira a tela antes de repetir.")
-            if progress >= 1:
-                return
-            # Chamadas nativas lentas não geram uma sequência de frames atrasados.
-            next_frame = time.monotonic() + SCROLL_FRAME_SECONDS
-
-    def scroll(self, snapshot, number, request, cancelled=lambda: False):
-        if request.direction not in ("up", "down") or request.intensity not in ("small", "normal", "page"):
-            raise ScreenError("Comando de rolagem inválido.")
-        native = self._validate_scroll_area(snapshot, number, cancelled)
-        try:
-            pattern = native.GetPattern(10004)
-            if not pattern or not pattern.VerticallyScrollable:
-                raise ScreenError("Essa área não oferece rolagem vertical.")
-            before = float(pattern.VerticalScrollPercent)
-            view = float(pattern.VerticalViewSize)
-        except ScreenError:
-            raise
-        except Exception as exc:
-            raise ScreenError("A área rolável ficou indisponível. Repita o comando.") from exc
-        if request.direction == "up" and before == 0:
-            return ScrollOutcome.START
-        if request.direction == "down" and before == 100:
-            return ScrollOutcome.END
-        self._check_scroll_window(snapshot.window, cancelled)
-        if 0 <= before <= 100 and 0 < view < 100:
-            fraction = {"small": .15, "normal": .5, "page": .9}[request.intensity]
-            delta = 100 * view / (100 - view) * fraction
-            target = min(100, before + delta) if request.direction == "down" else max(0, before - delta)
-            self._animate_scroll(snapshot, number, pattern, before, target, request.intensity, cancelled)
-            accepted = True
-        else:
-            # O tamanho exato do incremento é definido pelo aplicativo.
-            amount = (1 if request.direction == "up" else 4) if request.intensity == "small" else (0 if request.direction == "up" else 3)
-            accepted = pattern.Scroll(2, amount, waitTime=0)
-        if not accepted:
-            raise ScreenError("O aplicativo não confirmou a rolagem. Confira a tela antes de repetir.")
-        deadline = time.monotonic() + .3
-        after = before
-        while time.monotonic() < deadline and not cancelled():
-            try:
-                after = float(pattern.VerticalScrollPercent)
-            except Exception:
-                break
-            if after != before:
-                break
-            time.sleep(.03)
-        if after == 0 and request.direction == "up":
-            return ScrollOutcome.START
-        if after == 100 and request.direction == "down":
-            return ScrollOutcome.END
-        if 0 <= before <= 100 and 0 <= after <= 100 and (after - before) * (1 if request.direction == "down" else -1) > 0:
-            return ScrollOutcome.MOVED
-        return ScrollOutcome.REQUESTED

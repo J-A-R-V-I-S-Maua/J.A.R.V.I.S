@@ -1,6 +1,6 @@
 """Verificação da permissão de Acessibilidade do macOS."""
 
-from ApplicationServices import AXIsProcessTrusted
+from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
 
 
 def has_accessibility_permission() -> bool:
@@ -9,3 +9,7 @@ def has_accessibility_permission() -> bool:
     Não abre nenhuma janela do sistema: apenas consulta o estado atual.
     """
     return bool(AXIsProcessTrusted())
+
+
+def request_accessibility_permission() -> bool:
+    return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))

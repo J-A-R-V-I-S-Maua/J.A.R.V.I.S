@@ -151,10 +151,10 @@ class Backend:
         raise ScreenError("Limpeza do campo ativo indisponível neste sistema.")
 
     def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
-        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+        raise ScreenError("Rolagem por voz disponível somente no Windows e no macOS.")
 
     def scroll(self, snapshot, number, request, cancelled=lambda: False):
-        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+        raise ScreenError("Rolagem por voz disponível somente no Windows e no macOS.")
 
 
 def get_backend():

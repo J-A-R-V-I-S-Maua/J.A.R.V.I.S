@@ -106,8 +106,10 @@ O modo headless continua voltado à transcrição no terminal, usando o ambiente
 
 ## Limitações e evolução futura
 
-- O controle nativo utiliza UI Automation no Windows; o contrato macOS tem
-  implementação e testes simulados. No Linux, acesso à tela não está implementado.
+- O controle nativo utiliza UI Automation no Windows e a AX API no macOS (leitura,
+  ações, ditado por eventos Quartz, Enter, limpeza, menu de contexto, abertura e
+  rolagem pela barra AX). O macOS tem testes simulados; a validação real depende da
+  permissão de Acessibilidade. No Linux, acesso à tela não está implementado.
 - Aplicativos sem controles acessíveis ou com privilégios diferentes podem recusar
   operações. Não há fallback por coordenadas ou visão computacional.
 - “Parar” por voz depende da captura e transcrição. O botão cancela a interação

@@ -1,18 +1,29 @@
 """Acesso à árvore de acessibilidade no macOS (AX API, via pyobjc)."""
 
-from AppKit import NSWorkspace
+import time
+
+from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSWorkspace
+from CoreFoundation import CFEqual
 from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
     AXUIElementCreateApplication,
+    AXUIElementCreateSystemWide,
+    AXUIElementGetPid,
+    AXUIElementIsAttributeSettable,
     AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
     AXValueGetValue,
     kAXChildrenAttribute,
     kAXDescriptionAttribute,
     kAXErrorSuccess,
+    kAXFocusedApplicationAttribute,
+    kAXFocusedUIElementAttribute,
     kAXFocusedWindowAttribute,
     kAXMainWindowAttribute,
+    kAXParentAttribute,
+    kAXRaiseAction,
+    kAXWindowAttribute,
     kAXPositionAttribute,
     kAXPressAction,
     kAXRoleAttribute,
@@ -21,6 +32,14 @@ from ApplicationServices import (
     kAXValueAttribute,
     kAXValueCGPointType,
     kAXValueCGSizeType,
+)
+from Quartz import (
+    CGEventCreateKeyboardEvent,
+    CGEventKeyboardSetUnicodeString,
+    CGEventPost,
+    CGEventSetFlags,
+    kCGEventFlagMaskCommand,
+    kCGHIDEventTap,
 )
 
 
@@ -32,10 +51,70 @@ def read_attribute(element, name):
     return value
 
 
+def frontmost_pid():
+    application = read_attribute(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute)
+    if application is not None:
+        error, pid = AXUIElementGetPid(application, None)
+        if error == kAXErrorSuccess:
+            return pid
+    return NSWorkspace.sharedWorkspace().frontmostApplication().processIdentifier()
+
+
 def frontmost_application():
     """Devolve (pid, nome) do aplicativo que está em primeiro plano agora."""
-    app = NSWorkspace.sharedWorkspace().frontmostApplication()
-    return app.processIdentifier(), app.localizedName()
+    pid = frontmost_pid()
+    app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    return pid, app.localizedName() if app is not None else ""
+
+
+def activate_application(pid, timeout=1.0):
+    app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    if app is not None:
+        app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+    deadline = time.monotonic() + timeout
+    while frontmost_pid() != pid:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.03)
+    return True
+
+
+def focused_element(pid):
+    return read_attribute(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)
+
+
+def same_element(a, b):
+    return a is not None and b is not None and bool(CFEqual(a, b))
+
+
+def parent(element):
+    return read_attribute(element, kAXParentAttribute)
+
+
+def owner_window(element):
+    return read_attribute(element, kAXWindowAttribute)
+
+
+def action_names(element):
+    error, actions = AXUIElementCopyActionNames(element, None)
+    return tuple(actions or ()) if error == kAXErrorSuccess else ()
+
+
+def perform_action(element, name):
+    return AXUIElementPerformAction(element, name)
+
+
+def is_settable(element, name):
+    error, settable = AXUIElementIsAttributeSettable(element, name, None)
+    return error == kAXErrorSuccess and bool(settable)
+
+
+def set_attribute(element, name, value):
+    return AXUIElementSetAttributeValue(element, name, value)
+
+
+def raise_window(window):
+    return AXUIElementPerformAction(window, kAXRaiseAction)
 
 
 WEB_ACCESSIBILITY_ATTRIBUTES = ("AXManualAccessibility", "AXEnhancedUserInterface")
@@ -116,8 +195,12 @@ def describe_error(code):
 
 ACTION_ROLES = frozenset({
     "AXLink", "AXButton", "AXRadioButton", "AXCheckBox", "AXPopUpButton", "AXMenuItem",
+    "AXMenuButton", "AXDisclosureTriangle",
 })
 TEXT_INPUT_ROLES = frozenset({"AXTextField", "AXTextArea", "AXComboBox"})
+SELECTABLE_ROLES = frozenset({"AXRow"})
+SHOW_MENU_ACTION = "AXShowMenu"
+OPEN_ACTION = "AXOpen"
 
 
 def is_interactive(element, role):
@@ -186,3 +269,29 @@ def walk(element, max_depth, depth=0):
         return
     for child in read_attribute(element, kAXChildrenAttribute) or ():
         yield from walk(child, max_depth, depth + 1)
+
+
+KEY_RETURN = 36
+KEY_DELETE = 51
+KEY_A = 0
+COMMAND = kCGEventFlagMaskCommand
+
+
+def press_key(keycode, flags=0, text=None):
+    for down in (True, False):
+        event = CGEventCreateKeyboardEvent(None, keycode, down)
+        # Sem isso, um Shift ou Cmd segurado pelo usuário vira parte do evento.
+        CGEventSetFlags(event, flags)
+        if text is not None:
+            CGEventKeyboardSetUnicodeString(event, len(text.encode("utf-16-le")) // 2, text)
+        CGEventPost(kCGHIDEventTap, event)
+
+
+def type_text(text, allowed=lambda: True):
+    """Digita o texto letra por letra; para assim que allowed() devolver False."""
+    for char in text:
+        if not allowed():
+            return False
+        press_key(0, text=char)
+        time.sleep(0.01)
+    return True

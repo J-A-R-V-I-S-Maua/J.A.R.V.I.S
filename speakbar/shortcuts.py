@@ -1,6 +1,7 @@
 """Atalhos de abertura: correspondência exata e destinos tipados, sem shell."""
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
@@ -11,6 +12,14 @@ from PySide6.QtGui import QDesktopServices
 from .commands import normalize, SETTINGS_COMMANDS, RESERVED
 WINDOWS_RESOURCES = {"explorer": "Explorador de Arquivos", "settings": "Configurações do Windows",
                      "network": "Configurações de Rede", "sound": "Configurações de Som"}
+MACOS_RESOURCES = {"finder": "Finder", "settings": "Ajustes do Sistema",
+                   "network": "Ajustes de Rede", "sound": "Ajustes de Som"}
+MACOS_TARGETS = {"finder": ("-b", "com.apple.finder"), "settings": ("-b", "com.apple.systempreferences"),
+                 "network": ("x-apple.systempreferences:com.apple.Network-Settings.extension",),
+                 "sound": ("x-apple.systempreferences:com.apple.Sound-Settings.extension",)}
+SYSTEM_RESOURCES = {"windows": WINDOWS_RESOURCES, "macos": MACOS_RESOURCES}
+SYSTEM_KIND = "macos" if sys.platform == "darwin" else "windows"
+APPLICATION_SUFFIXES = (".exe", ".lnk", ".app")
 
 
 def validate_shortcut(item, check_destination=True):
@@ -32,16 +41,18 @@ def validate_shortcut(item, check_destination=True):
         if url.scheme not in ("http", "https") or not url.hostname or any(c.isspace() for c in destination) or url.username or url.password:
             raise ValueError("Informe um endereço HTTP ou HTTPS válido.")
         item["destination"] = destination
-    elif kind == "windows":
-        if destination not in WINDOWS_RESOURCES:
-            raise ValueError("Selecione um recurso do Windows.")
+    elif kind in SYSTEM_RESOURCES:
+        if destination not in SYSTEM_RESOURCES[kind]:
+            raise ValueError("Selecione um recurso do Windows." if kind == "windows" else "Selecione um recurso do macOS.")
     elif kind in ("application", "folder"):
         path = Path(destination)
         if not path.is_absolute():
             raise ValueError("Selecione um caminho absoluto.")
-        if kind == "application" and path.suffix.lower() not in (".exe", ".lnk"):
-            raise ValueError("Selecione um aplicativo .exe ou atalho .lnk.")
-        if check_destination and not (path.is_dir() if kind == "folder" else path.is_file()):
+        suffix = path.suffix.lower()
+        if kind == "application" and suffix not in APPLICATION_SUFFIXES:
+            raise ValueError("Selecione um aplicativo .app (macOS), .exe ou atalho .lnk (Windows).")
+        directory = kind == "folder" or suffix == ".app"
+        if check_destination and not (path.is_dir() if directory else path.is_file()):
             raise ValueError("O destino não existe. Selecione novamente.")
     else:
         raise ValueError("Tipo de ação inválido.")
@@ -94,8 +105,17 @@ class ShortcutService:
         if kind == "site":
             if not QDesktopServices.openUrl(QUrl(destination)):
                 raise OSError("O sistema recusou o endereço.")
+        elif sys.platform == "darwin":
+            if kind == "windows":
+                raise OSError("Recursos do Windows estão disponíveis somente no Windows.")
+            arguments = MACOS_TARGETS[destination] if kind == "macos" else (destination,)
+            result = subprocess.run(["/usr/bin/open", *arguments], capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                raise OSError(result.stderr.strip() or "O macOS recusou a abertura.")
         elif sys.platform != "win32":
-            raise OSError("Esse tipo de abertura está disponível somente no Windows.")
+            raise OSError("Esse tipo de abertura está disponível somente no Windows e no macOS.")
+        elif kind == "macos":
+            raise OSError("Recursos do macOS estão disponíveis somente no macOS.")
         elif kind == "windows":
             if destination == "explorer":
                 os.startfile(str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "explorer.exe"))
