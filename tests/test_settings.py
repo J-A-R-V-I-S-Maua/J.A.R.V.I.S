@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import Mock, patch
 from PySide6.QtWidgets import QApplication
 from speakbar.preferences import PreferencesService
-from speakbar.shortcuts import (ShortcutService, ShortcutConversation, disk_image_application, validate_shortcut,
-                                validate_shortcuts, normalize)
+from speakbar.shortcuts import (ShortcutService, ShortcutConversation, disk_image_application, find_application,
+                                installed_applications, validate_shortcut, validate_shortcuts, normalize)
 from speakbar.controller import VoiceController, DemoController
 from speakbar.settings_window import SettingsWindow
 from wakeword.detect_microphone_service import VoiceService
@@ -198,6 +198,44 @@ class MacOSShortcutTest(unittest.TestCase):
             self.assertTrue(finished.wait(5))
         self.assertEqual(messages, ["Falha ao abrir Notas. hdiutil: attach failed - image not recognized"])
 
+
+
+class ApplicationCatalogTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        for folder, apps in (("Applications", ("Safari.app", "Calendar.app", "Captura de Tela.app", "ChatGPT.app")),
+                             ("System", ("Safari.app", "Captura de Imagem.app")), ("Library", ("Finder.app",))):
+            for app in apps:
+                (root / folder / app).mkdir(parents=True)
+        (root / "Applications" / "Leia-me.txt").touch()
+        names = {"Calendar": "Calendário"}
+        self.apps = installed_applications(
+            (root / "Applications", root / "System", root / "Library" / "Finder.app", root / "Ausente"),
+            name=lambda path: names.get(path.stem, path.stem))
+
+    def found(self, phrase):
+        status, apps = find_application(phrase, self.apps)
+        return status, [app.name for app in apps]
+
+    def test_lists_each_app_once_with_its_display_name(self):
+        self.assertEqual([app.name for app in self.apps],
+                         ["Calendário", "Captura de Imagem", "Captura de Tela", "ChatGPT", "Finder", "Safari"])
+        self.assertEqual(next(app for app in self.apps if app.name == "Safari").path.parent.name, "Applications")
+        self.assertEqual(installed_applications(()), [])
+
+    def test_spoken_name_finds_the_app(self):
+        self.assertEqual(self.found("abrir o Safari"), ("match", ["Safari"]))
+        self.assertEqual(self.found("abrir calendário"), ("match", ["Calendário"]))
+        self.assertEqual(self.found("abrir calendar"), ("match", ["Calendário"]))
+        self.assertEqual(self.found("abril o finder"), ("match", ["Finder"]))
+        self.assertEqual(self.found("abrir chat gpt"), ("match", ["ChatGPT"]))
+
+    def test_similar_names_and_numbers_are_not_guessed(self):
+        self.assertEqual(self.found("abrir a captura"), ("ambiguous", ["Captura de Imagem", "Captura de Tela"]))
+        self.assertEqual(self.found("abrir 2"), ("none", []))
+        self.assertEqual(self.found("abrir planilhas"), ("none", []))
 
 
 class SettingsConversationTest(unittest.TestCase):

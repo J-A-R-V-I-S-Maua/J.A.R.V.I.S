@@ -96,18 +96,19 @@ def _score(wanted, name_keys):
     return sum(max(_similarity(word, key) for key in name_keys) for word in wanted) / len(wanted)
 
 
-def choose(phrase, names):
+def choose(phrase, names, numbers=True):
     """Decide qual dos itens (identificados por nome) a frase pede.
 
     Só devolve "match" quando um item se destaca com folga. Quando há empate ou dúvida,
     devolve "ambiguous" e as opções; sem nenhum candidato, "none". Nunca adivinha.
+    Com numbers=False, "33" não escolhe o item 33 (listas que o usuário não está vendo).
     """
     tokens = tokenize(phrase)
     meaningful = [token for token in tokens if token not in STOPWORDS]
 
     number = _explicit_number(meaningful)
     if number is not None:
-        if 1 <= number <= len(names):
+        if numbers and 1 <= number <= len(names):
             return Choice("match", number - 1)
         return Choice("none")
 

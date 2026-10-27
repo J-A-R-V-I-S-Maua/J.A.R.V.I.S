@@ -27,6 +27,10 @@ class ChooseTest(unittest.TestCase):
         self.assertEqual(choose("número 99", NAMES).status, "none")
         self.assertEqual(choose("0", NAMES).status, "none")
 
+    def test_numero_ignorado_em_lista_que_nao_esta_na_tela(self):
+        self.assertEqual(choose("número 3", NAMES, numbers=False).status, "none")
+        self.assertEqual(choose("notícias", NAMES, numbers=False).index, 1)
+
     def test_nome_unico_ignora_acento_e_caixa(self):
         self.assertEqual(choose("NOTICIAS", NAMES).index, 1)
         self.assertEqual(choose("clique em notícias", NAMES).index, 1)

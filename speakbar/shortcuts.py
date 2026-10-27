@@ -1,4 +1,5 @@
 """Atalhos de abertura: correspondência exata e destinos tipados, sem shell."""
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import plistlib
@@ -11,6 +12,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 
 
+from screen_access.matching import STOPWORDS, choose, tokenize
 from .commands import normalize, SETTINGS_COMMANDS, RESERVED
 WINDOWS_RESOURCES = {"explorer": "Explorador de Arquivos", "settings": "Configurações do Windows",
                      "network": "Configurações de Rede", "sound": "Configurações de Som"}
@@ -22,6 +24,10 @@ MACOS_TARGETS = {"finder": ("-b", "com.apple.finder"), "settings": ("-b", "com.a
 SYSTEM_RESOURCES = {"windows": WINDOWS_RESOURCES, "macos": MACOS_RESOURCES}
 SYSTEM_KIND = "macos" if sys.platform == "darwin" else "windows"
 APPLICATION_SUFFIXES = (".exe", ".lnk", ".app", ".dmg")
+# O Finder fica fora das pastas de aplicativos.
+MACOS_APPLICATION_FOLDERS = ("/Applications", "/Applications/Utilities", "/System/Applications",
+                             "/System/Applications/Utilities", "~/Applications",
+                             "/System/Library/CoreServices/Finder.app")
 
 
 def validate_shortcut(item, check_destination=True):
@@ -78,6 +84,52 @@ def disk_image_application(path):
     if len(apps) > 1:
         raise OSError("A imagem contém mais de um aplicativo. Cadastre o .app desejado.")
     return apps[0]
+
+
+@dataclass(frozen=True)
+class Application:
+    name: str
+    path: Path
+
+    @property
+    def spoken_names(self):
+        # O Finder mostra "Calendário", mas o arquivo continua Calendar.app; os dois valem.
+        return self.name if self.path.stem == self.name else f"{self.name} {self.path.stem}"
+
+
+def display_name(path):
+    if sys.platform == "darwin":
+        from AppKit import NSFileManager
+        name = NSFileManager.defaultManager().displayNameAtPath_(str(path))
+        if name:
+            return str(name).removesuffix(".app")
+    return path.stem
+
+
+def installed_applications(folders=None, name=display_name):
+    if folders is None:
+        folders = MACOS_APPLICATION_FOLDERS if sys.platform == "darwin" else ()
+    apps, seen = [], set()
+    for folder in map(lambda folder: Path(folder).expanduser(), folders):
+        for path in [folder] if folder.suffix == ".app" and folder.is_dir() else sorted(folder.glob("*.app")):
+            app = Application(name(path), path)
+            if normalize(app.name) not in seen:
+                seen.add(normalize(app.name))
+                apps.append(app)
+    return sorted(apps, key=lambda app: normalize(app.name))
+
+
+def find_application(phrase, apps):
+    """Devolve (status, apps): "match" com um app, "ambiguous" com os parecidos ou "none"."""
+    names = [app.spoken_names for app in apps]
+    choice = choose(phrase, names, numbers=False)
+    words = [word for word in tokenize(phrase)[1:] if word not in STOPWORDS]
+    if choice.status == "none" and len(words) > 1:
+        # A transcrição separa nomes como "ChatGPT" em "chat gpt".
+        choice = choose(tokenize(phrase)[0] + " " + "".join(words), names, numbers=False)
+    if choice.status == "match":
+        return "match", [apps[choice.index]]
+    return choice.status, [apps[index] for index in choice.candidates]
 
 
 def validate_shortcuts(items, check_destination=True):
