@@ -371,12 +371,30 @@ cadastros antes de salvar. **Cancelar** descarta o rascunho. **Testar abertura**
 explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocorre.
 
 Exemplo: nome **YouTube**, frase **abrir YouTube**, ação **Site**, destino **youtube.com**.
-Depois diga **“executar atalho abrir YouTube”**, ou **“executar atalho”** e responda
-**“abrir YouTube”** na captura automática seguinte. Os atalhos executam diretamente,
+Depois diga **“abrir YouTube”**, **“executar atalho abrir YouTube”**, ou **“executar atalho”**
+e responda **“abrir YouTube”** na captura automática seguinte. Os atalhos executam diretamente,
 sem confirmação adicional. Cliques, digitação, Enter e limpeza de campo continuam
 exigindo confirmação; rolagem é direta. A comparação das frases ignora acentos, pontuação, caixa e
 espaços extras, mas não adivinha uma frase diferente. Frases repetidas ou reservadas,
 como “cancelar”, “confirmar” e “abra as configurações”, são recusadas.
+
+### Abrir aplicativos pelo nome (macOS)
+
+Sem cadastro, diga **“Hey Jarvis, abrir Safari”** (também “abra”, “abre”). A busca usa os
+aplicativos de `/Applications`, `/System/Applications`, das pastas Utilities, de
+`~/Applications` e o Finder, com o nome mostrado pelo Finder: “abrir calendário” e
+“abrir calendar” encontram o mesmo app. Nomes separados pela transcrição, como
+“chat gpt”, também são reconhecidos. Um atalho cadastrado com a mesma frase tem prioridade.
+
+- Um único aplicativo correspondente é aberto diretamente.
+- Com nomes parecidos, a barra numera as opções (“1 Captura de Imagem, 2 Captura de Tela”)
+  e abre uma captura: diga o número, uma parte do nome ou **“cancelar”**.
+- Sem correspondência, há uma nova tentativa para repetir o nome; a segunda falha encerra.
+  O prazo é de 30 segundos. Números isolados (“abrir 3”) não escolhem aplicativos.
+- **“Abrir menu de contexto…”** continua sendo um comando de tela. No Windows, a busca por
+  aplicativos instalados ainda não está disponível; use os atalhos cadastrados.
+
+A lista é lida novamente a cada minuto, para incluir aplicativos instalados depois.
 
 Na seção de voz, selecione o dispositivo e salve antes de testar um microfone diferente.
 **Testar captação** exibe o nível por cinco segundos. **Testar transcrição** mostra a

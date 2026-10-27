@@ -15,10 +15,10 @@ SETTINGS_COMMANDS = {normalize(text) for text in (
 )}
 HELP_COMMANDS = {"ajuda", "o que posso dizer", "quais comandos"}
 HELP = {
-    "general": "Diga mostrar números, clique em [nome], digitar [texto], role para baixo, role para cima, Enter, limpar campo, executar atalho ou abrir configurações.",
+    "general": "Diga mostrar números, clique em [nome], digitar [texto], role para baixo, role para cima, Enter, limpar campo, abrir [aplicativo], executar atalho ou abrir configurações.",
     "choosing": "Diga um dos números exibidos, confirmar após escolher, ou cancelar.",
     "confirming": "Diga confirmar ou sim para executar; cancelar ou não para abandonar.",
-    "shortcut": "Diga a frase cadastrada nas configurações ou cancelar.",
+    "shortcut": "Diga a frase cadastrada nas configurações, o número ou o nome do aplicativo, ou cancelar.",
     "scroll_waiting": "Diga mais, para cima, para baixo, role um pouco para baixo ou role uma página para cima. Parar, cancelar ou silêncio encerra a rolagem.",
     "scroll_choosing": "Diga o número de uma das áreas roláveis exibidas ou cancelar. A rolagem será executada diretamente nessa área.",
     "settings": "Diga ir para atalhos, ir para voz e microfone, ir para aparência e acessibilidade, ir para ajuda e diagnóstico, salvar configurações ou fechar configurações. Ajustes: tamanho do texto 22, tamanho dos números 18, ativar alto contraste, ativar lembrar posição, tempo de silêncio 3 segundos, tempo para começar a falar 15 segundos, duração máxima 30 segundos, limiar de ativação 0,3. Use desativar para desligar as opções.",

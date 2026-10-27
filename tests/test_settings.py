@@ -9,8 +9,9 @@ import unittest
 from unittest.mock import Mock, patch
 from PySide6.QtWidgets import QApplication
 from speakbar.preferences import PreferencesService
-from speakbar.shortcuts import (ShortcutService, ShortcutConversation, disk_image_application, find_application,
-                                installed_applications, validate_shortcut, validate_shortcuts, normalize)
+from speakbar.shortcuts import (Application, ShortcutService, ShortcutConversation, disk_image_application,
+                                find_application, installed_applications, validate_shortcut, validate_shortcuts,
+                                normalize)
 from speakbar.controller import VoiceController, DemoController
 from speakbar.settings_window import SettingsWindow
 from wakeword.detect_microphone_service import VoiceService
@@ -236,6 +237,92 @@ class ApplicationCatalogTest(unittest.TestCase):
         self.assertEqual(self.found("abrir a captura"), ("ambiguous", ["Captura de Imagem", "Captura de Tela"]))
         self.assertEqual(self.found("abrir 2"), ("none", []))
         self.assertEqual(self.found("abrir planilhas"), ("none", []))
+
+
+class ApplicationVoiceTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.apps = []
+        for name in ("Safari", "Captura de Imagem", "Captura de Tela"):
+            path = Path(self.temp.name) / f"{name}.app"
+            path.mkdir()
+            self.apps.append(Application(name, path))
+        self.launch = Mock()
+        self.service = ShortcutService(validate_shortcuts([shortcut()]), self.launch, catalog=lambda: self.apps)
+        self.conversation = ShortcutConversation(self.service)
+        self.messages, self.captures = [], Mock()
+        self.conversation.changed.connect(self.messages.append)
+        self.conversation.capture_requested.connect(self.captures)
+        self.addCleanup(self.conversation.cancel)
+
+    def opened(self):
+        return [call.args[0]["name"] for call in self.launch.call_args_list]
+
+    def test_unique_name_opens_directly(self):
+        self.assertTrue(self.conversation.handle("Abrir o Safari"))
+        self.assertEqual(self.opened(), ["Safari"])
+        self.assertEqual(self.messages, ["Abertura de Safari solicitada ao sistema."])
+        self.assertFalse(self.conversation.active)
+        self.captures.assert_not_called()
+
+    def test_registered_phrase_wins_without_executar_atalho(self):
+        self.conversation.handle("abrir YouTube")
+        APP.processEvents()
+        self.assertEqual(self.opened(), ["YouTube"])
+
+    def test_similar_names_are_numbered_and_chosen_by_number_or_name(self):
+        for answer, expected in (("dois", "Captura de Tela"), ("número um", "Captura de Imagem"), ("tela", "Captura de Tela")):
+            with self.subTest(answer=answer):
+                self.launch.reset_mock()
+                self.conversation.handle("abrir a captura")
+                self.assertTrue(self.conversation.active)
+                self.assertEqual(self.messages[-1], "Encontrei 2 aplicativos: 1 Captura de Imagem, 2 Captura de Tela. "
+                                                    "Diga o número ou cancelar.")
+                self.conversation.handle(answer)
+                self.assertEqual(self.opened(), [expected])
+                self.assertFalse(self.conversation.active)
+
+    def test_unknown_app_gets_one_retry_then_cancels(self):
+        self.conversation.handle("abrir planilhas")
+        self.assertTrue(self.conversation.active)
+        self.assertIn("Não encontrei esse aplicativo", self.messages[-1])
+        self.conversation.handle("safari")
+        self.assertEqual(self.opened(), ["Safari"])
+        self.conversation.handle("abrir planilhas")
+        self.conversation.handle("planilhas")
+        self.assertFalse(self.conversation.active)
+        self.assertEqual(self.opened(), ["Safari"])
+        self.assertEqual(self.captures.call_count, 2)
+
+    def test_cancel_expiration_and_phrases_for_other_handlers(self):
+        self.conversation.handle("abrir a captura")
+        self.conversation.handle("cancelar")
+        self.assertEqual(self.messages[-1], "Abertura cancelada.")
+        self.conversation.handle("abrir a captura")
+        self.conversation.timer.timeout.emit()
+        self.assertIn("Tempo esgotado", self.messages[-1])
+        self.assertFalse(self.conversation.handle("abrir menu de contexto do Safari"))
+        self.assertFalse(self.conversation.handle("clique em salvar"))
+        self.apps.clear()
+        self.service._applications = None
+        self.assertFalse(self.conversation.handle("abrir o Safari"))
+        self.launch.assert_not_called()
+
+    def test_voice_result_opens_app_through_controller(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = VoiceController(preferences=PreferencesService(Path(directory) / "settings.json"))
+            controller.thread = Mock()
+            service = VoiceService()
+            controller.thread.service = service
+            controller.shortcut_service.catalog = lambda: self.apps
+            controller.shortcut_service.launcher = self.launch
+            service._interaction_id += 1
+            service._publish(State.RESULT, "abrir o Safari")
+            controller._receive(service.snapshot)
+            self.assertEqual(self.opened(), ["Safari"])
+            self.assertEqual(controller.presentation.message, "Abertura de Safari solicitada ao sistema.")
+            controller.screen.shutdown()
 
 
 class SettingsConversationTest(unittest.TestCase):

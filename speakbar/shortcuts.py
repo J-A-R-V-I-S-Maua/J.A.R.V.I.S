@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import sys
 import threading
@@ -12,6 +13,7 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 
 
+from screen_access.commands import action_command, parse_number
 from screen_access.matching import STOPWORDS, choose, tokenize
 from .commands import normalize, SETTINGS_COMMANDS, RESERVED
 WINDOWS_RESOURCES = {"explorer": "Explorador de Arquivos", "settings": "Configurações do Windows",
@@ -23,6 +25,8 @@ MACOS_TARGETS = {"finder": ("-b", "com.apple.finder"), "settings": ("-b", "com.a
                  "sound": ("x-apple.systempreferences:com.apple.Sound-Settings.extension",)}
 SYSTEM_RESOURCES = {"windows": WINDOWS_RESOURCES, "macos": MACOS_RESOURCES}
 SYSTEM_KIND = "macos" if sys.platform == "darwin" else "windows"
+OPEN_VERB = re.compile(r"^(?:abrir|abra|abre|abril|abriu)\b")  # "abril" é um erro comum da transcrição.
+CANCEL = {"cancelar", "cancele", "nao", "parar", "pare"}
 APPLICATION_SUFFIXES = (".exe", ".lnk", ".app", ".dmg")
 # O Finder fica fora das pastas de aplicativos.
 MACOS_APPLICATION_FOLDERS = ("/Applications", "/Applications/Utilities", "/System/Applications",
@@ -148,11 +152,27 @@ def validate_shortcuts(items, check_destination=True):
 
 
 class ShortcutService:
-    def __init__(self, items=(), launcher=None, demo=False, notify=lambda text: None):
+    def __init__(self, items=(), launcher=None, demo=False, notify=lambda text: None, catalog=installed_applications):
         self.items = list(items)
         self.launcher = launcher or self._launch
         self.demo = demo
         self.notify = notify
+        self.catalog = catalog
+        self._applications = None
+        self._read_at = 0
+
+    def applications(self):
+        if self._applications is None or time.monotonic() - self._read_at > 60:
+            self._applications, self._read_at = self.catalog(), time.monotonic()
+        return self._applications
+
+    def has_phrase(self, phrase):
+        key = normalize(phrase)
+        return any(item["enabled"] and normalize(item["phrase"]) == key for item in self.items)
+
+    def open_application(self, app):
+        return self.execute(dict(id=f"app:{app.path}", name=app.name, phrase=f"abrir {app.name}",
+                                 kind="application", destination=str(app.path), enabled=True))
 
     def resolve(self, phrase):
         key = normalize(phrase)
@@ -228,9 +248,12 @@ class ShortcutConversation(QObject):
         self.generation = 0
         self.retry_count = 0
         self.deadline = None
+        self.choices = None  # None: atalho; []: aguardando o nome; lista: apps para escolher.
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
-        self.timer.timeout.connect(lambda: self.cancel("Atalho expirado. Repita executar atalho."))
+        self.timer.timeout.connect(lambda: self.cancel(
+            "Atalho expirado. Repita executar atalho." if self.choices is None
+            else "Tempo esgotado. Diga ‘Hey Jarvis’ e repita abrir o aplicativo."))
 
     def cancel(self, text=None):
         was_active = self.active
@@ -238,6 +261,7 @@ class ShortcutConversation(QObject):
         self.active = False
         self.retry_count = 0
         self.deadline = None
+        self.choices = None
         self.timer.stop()
         if was_active:
             self.cancelled.emit()
@@ -247,8 +271,10 @@ class ShortcutConversation(QObject):
     def handle(self, text):
         value = normalize(text)
         if self.active:
-            if value in {"cancelar", "cancele", "nao", "parar", "pare"}:
-                self.cancel("Atalho cancelado.")
+            if value in CANCEL:
+                self.cancel("Atalho cancelado." if self.choices is None else "Abertura cancelada.")
+            elif self.choices is not None:
+                self._answer_application(text)
             else:
                 self._queue(value)
             return True
@@ -263,7 +289,63 @@ class ShortcutConversation(QObject):
         if value.startswith("executar atalho "):
             self._queue(value[len("executar atalho "):])
             return True
+        if self.service.has_phrase(value):
+            self._queue(value)
+            return True
+        # "abrir menu de contexto…" continua sendo um comando de tela.
+        if OPEN_VERB.match(value) and not action_command(text) and self.service.applications():
+            self._open_application(text)
+            return True
         return False
+
+    def _start(self):
+        self.active = True
+        self.retry_count = 0
+        self.deadline = time.monotonic() + 30
+        self.timer.start(30000)
+
+    def _open_application(self, text):
+        status, apps = find_application(text, self.choices or self.service.applications())
+        if status == "none" and self.choices:
+            status, apps = find_application(text, self.service.applications())
+        if status == "match":
+            self._launch_application(apps[0])
+            return
+        first = not self.active
+        if first:
+            self._start()
+        if status == "none":
+            self.choices = []
+            self.retry("Não encontrei esse aplicativo. Diga o nome de novo ou cancelar. Ouvindo novamente…")
+            return
+        self.choices = apps
+        listing = ", ".join(f"{number} {app.name}" for number, app in enumerate(apps, 1))
+        message = f"Encontrei {len(apps)} aplicativos: {listing}. Diga o número ou cancelar."
+        if first:
+            self.changed.emit(message)
+            self.capture_requested.emit()
+        else:
+            self.retry(message + " Ouvindo novamente…")
+
+    def _answer_application(self, text):
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            self.cancel("Tempo esgotado. Diga ‘Hey Jarvis’ e repita abrir o aplicativo.")
+            return
+        number = parse_number(text) if self.choices else None
+        if number is not None and number <= len(self.choices):
+            self._launch_application(self.choices[number - 1])
+        else:
+            self._open_application(text)
+
+    def _launch_application(self, app):
+        self.active = False
+        self.choices = None
+        self.timer.stop()
+        try:
+            message = self.service.open_application(app)
+        except ValueError as exc:
+            message = str(exc)
+        self.changed.emit(message)
 
     def retry(self, message):
         if self.retry_count or (self.deadline is not None and time.monotonic() >= self.deadline):
