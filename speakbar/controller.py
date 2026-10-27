@@ -34,6 +34,7 @@ class VoiceController(QObject):
     audio_level = Signal(int)
     diagnostic_result = Signal(str)
     devices_changed = Signal(object)
+    shortcut_notice = Signal(str)
 
     def __init__(self, parent=None, service_factory=None, screen_factory=None, preferences=None):
         super().__init__(parent)
@@ -61,7 +62,9 @@ class VoiceController(QObject):
         from .preferences import PreferencesService
         from .shortcuts import ShortcutService, ShortcutConversation
         self.preferences = preferences or PreferencesService()
-        self.shortcut_service = ShortcutService(self.preferences.shortcuts)
+        # O aviso vem da thread que monta o .dmg; o sinal entrega na thread da interface.
+        self.shortcut_service = ShortcutService(self.preferences.shortcuts, notify=self.shortcut_notice.emit)
+        self.shortcut_notice.connect(self._show_text)
         self.shortcuts = ShortcutConversation(self.shortcut_service, self)
         self.shortcuts.changed.connect(self._show_text)
         self.shortcuts.cancelled.connect(self._invalidate_voice)

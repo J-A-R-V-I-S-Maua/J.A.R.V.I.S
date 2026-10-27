@@ -1,8 +1,10 @@
 """Atalhos de abertura: correspondência exata e destinos tipados, sem shell."""
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
+import threading
 import time
 from urllib.parse import urlsplit
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
@@ -19,7 +21,7 @@ MACOS_TARGETS = {"finder": ("-b", "com.apple.finder"), "settings": ("-b", "com.a
                  "sound": ("x-apple.systempreferences:com.apple.Sound-Settings.extension",)}
 SYSTEM_RESOURCES = {"windows": WINDOWS_RESOURCES, "macos": MACOS_RESOURCES}
 SYSTEM_KIND = "macos" if sys.platform == "darwin" else "windows"
-APPLICATION_SUFFIXES = (".exe", ".lnk", ".app")
+APPLICATION_SUFFIXES = (".exe", ".lnk", ".app", ".dmg")
 
 
 def validate_shortcut(item, check_destination=True):
@@ -50,13 +52,32 @@ def validate_shortcut(item, check_destination=True):
             raise ValueError("Selecione um caminho absoluto.")
         suffix = path.suffix.lower()
         if kind == "application" and suffix not in APPLICATION_SUFFIXES:
-            raise ValueError("Selecione um aplicativo .app (macOS), .exe ou atalho .lnk (Windows).")
+            raise ValueError("Selecione um aplicativo .app ou imagem .dmg (macOS), .exe ou atalho .lnk (Windows).")
         directory = kind == "folder" or suffix == ".app"
         if check_destination and not (path.is_dir() if directory else path.is_file()):
             raise ValueError("O destino não existe. Selecione novamente.")
     else:
         raise ValueError("Tipo de ação inválido.")
     return item
+
+
+def is_disk_image(item):
+    return item["kind"] == "application" and Path(item["destination"]).suffix.lower() == ".dmg"
+
+def disk_image_application(path):
+    """Monta o .dmg (ou reaproveita a montagem) e devolve o único .app que ele contém."""
+    result = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-plist", str(path)],
+                            capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+    if result.returncode:
+        raise OSError(result.stderr.decode(errors="replace").strip() or "Não foi possível montar a imagem.")
+    entities = plistlib.loads(result.stdout).get("system-entities", [])
+    apps = sorted(app for entity in entities if "mount-point" in entity
+                  for app in Path(entity["mount-point"]).glob("*.app"))
+    if not apps:
+        raise OSError("A imagem não contém um aplicativo.")
+    if len(apps) > 1:
+        raise OSError("A imagem contém mais de um aplicativo. Cadastre o .app desejado.")
+    return apps[0]
 
 
 def validate_shortcuts(items, check_destination=True):
@@ -75,10 +96,11 @@ def validate_shortcuts(items, check_destination=True):
 
 
 class ShortcutService:
-    def __init__(self, items=(), launcher=None, demo=False):
+    def __init__(self, items=(), launcher=None, demo=False, notify=lambda text: None):
         self.items = list(items)
         self.launcher = launcher or self._launch
         self.demo = demo
+        self.notify = notify
 
     def resolve(self, phrase):
         key = normalize(phrase)
@@ -93,11 +115,23 @@ class ShortcutService:
         item = validate_shortcut(item)
         if self.demo:
             return "Demonstração: nenhuma abertura foi executada."
+        if is_disk_image(item):
+            # Montar pode demorar; a interface não espera por isso.
+            threading.Thread(target=self._launch_later, args=(item,), daemon=True).start()
+            return f"Montando a imagem de {item['name']}…"
         try:
             self.launcher(item)
         except Exception as exc:
             raise ValueError(f"Falha ao abrir {item['destination']}. Revise o destino. {exc}") from exc
         return f"Abertura de {item['name']} solicitada ao sistema."
+
+    def _launch_later(self, item):
+        try:
+            self.launcher(item)
+        except Exception as exc:
+            self.notify(f"Falha ao abrir {item['name']}. {exc}")
+        else:
+            self.notify(f"Abertura de {item['name']} solicitada ao sistema.")
 
     @staticmethod
     def _launch(item):
@@ -108,13 +142,18 @@ class ShortcutService:
         elif sys.platform == "darwin":
             if kind == "windows":
                 raise OSError("Recursos do Windows estão disponíveis somente no Windows.")
-            arguments = MACOS_TARGETS[destination] if kind == "macos" else (destination,)
+            if kind == "macos":
+                arguments = MACOS_TARGETS[destination]
+            elif is_disk_image(item):
+                arguments = (str(disk_image_application(destination)),)
+            else:
+                arguments = (destination,)
             result = subprocess.run(["/usr/bin/open", *arguments], capture_output=True, text=True, timeout=10)
             if result.returncode:
                 raise OSError(result.stderr.strip() or "O macOS recusou a abertura.")
         elif sys.platform != "win32":
             raise OSError("Esse tipo de abertura está disponível somente no Windows e no macOS.")
-        elif kind == "macos":
+        elif kind == "macos" or is_disk_image(item):
             raise OSError("Recursos do macOS estão disponíveis somente no macOS.")
         elif kind == "windows":
             if destination == "explorer":

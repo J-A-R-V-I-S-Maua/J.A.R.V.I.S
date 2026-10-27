@@ -501,7 +501,8 @@ class SettingsWindow(QDialog):
             path = QFileDialog.getExistingDirectory(self, "Selecionar pasta")
         else:
             if sys.platform == "darwin":
-                path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo", "/Applications", "Aplicativos (*.app)")
+                path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo ou imagem de disco", "/Applications",
+                                                      "Aplicativos (*.app *.dmg)")
             else:
                 path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo ou atalho", "", "Aplicativos (*.exe *.lnk)")
         if path:

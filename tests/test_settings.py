@@ -1,13 +1,16 @@
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 from PySide6.QtWidgets import QApplication
 from speakbar.preferences import PreferencesService
-from speakbar.shortcuts import ShortcutService, ShortcutConversation, validate_shortcut, validate_shortcuts, normalize
+from speakbar.shortcuts import (ShortcutService, ShortcutConversation, disk_image_application, validate_shortcut,
+                                validate_shortcuts, normalize)
 from speakbar.controller import VoiceController, DemoController
 from speakbar.settings_window import SettingsWindow
 from wakeword.detect_microphone_service import VoiceService
@@ -116,7 +119,7 @@ class MacOSShortcutTest(unittest.TestCase):
         validate_shortcut(mac_shortcut("abrir notas", str(self.app), "application", "one"))
         validate_shortcut(mac_shortcut("abrir som", "sound", "macos", "two"))
         for item in (mac_shortcut("abrir som", "explorer", "macos", "three"),
-                     mac_shortcut("abrir notas", str(Path(self.temp.name) / "Notas.dmg"), "application", "four")):
+                     mac_shortcut("abrir notas", str(Path(self.temp.name) / "Notas.zip"), "application", "four")):
             with self.assertRaises(ValueError):
                 validate_shortcut(item, check_destination=False)
 
@@ -151,6 +154,49 @@ class MacOSShortcutTest(unittest.TestCase):
         with patch("speakbar.shortcuts.sys.platform", "win32"):
             with self.assertRaisesRegex(ValueError, "somente no macOS"):
                 ShortcutService().execute(mac_shortcut("abrir som", "sound", "macos", "three"))
+
+    def mount(self, *apps):
+        volume = Path(tempfile.mkdtemp(dir=self.temp.name))
+        for app in apps:
+            (volume / app).mkdir()
+        output = plistlib.dumps({"system-entities": [{"dev-entry": "/dev/disk4"}, {"mount-point": str(volume)}]})
+        return volume, lambda args, **kwargs: subprocess.CompletedProcess(args, 0, output if "hdiutil" in args[0] else "", "")
+
+    def test_disk_image_mounts_read_only_and_opens_the_app_inside(self):
+        image = Path(self.temp.name) / "Notas.dmg"
+        image.touch()
+        item = validate_shortcut(mac_shortcut("abrir notas", str(image), "application", "Notas"))
+        volume, run = self.mount("Notas.app")
+        messages, finished = [], threading.Event()
+        service = ShortcutService(notify=lambda text: (messages.append(text), finished.set()))
+        with patch("speakbar.shortcuts.sys.platform", "darwin"), \
+                patch("speakbar.shortcuts.subprocess.run", side_effect=run) as calls:
+            self.assertEqual(service.execute(item), "Montando a imagem de Notas…")
+            self.assertTrue(finished.wait(5))
+        hdiutil, opened = [call.args[0] for call in calls.call_args_list]
+        self.assertEqual(hdiutil[:2], ["/usr/bin/hdiutil", "attach"])
+        self.assertIn("-readonly", hdiutil)
+        self.assertEqual(hdiutil[-1], str(image))
+        self.assertEqual(opened, ["/usr/bin/open", str(volume / "Notas.app")])
+        self.assertEqual(messages, ["Abertura de Notas solicitada ao sistema."])
+
+    def test_disk_image_without_a_single_app_is_reported(self):
+        for apps, message in (((), "não contém um aplicativo"), (("A.app", "B.app"), "mais de um aplicativo")):
+            with self.subTest(apps=apps):
+                _, run = self.mount(*apps)
+                with patch("speakbar.shortcuts.subprocess.run", side_effect=run):
+                    with self.assertRaisesRegex(OSError, message):
+                        disk_image_application("/tmp/Notas.dmg")
+        image = Path(self.temp.name) / "Notas.dmg"
+        image.touch()
+        failed = subprocess.CompletedProcess([], 1, b"", b"hdiutil: attach failed - image not recognized")
+        messages, finished = [], threading.Event()
+        service = ShortcutService(notify=lambda text: (messages.append(text), finished.set()))
+        with patch("speakbar.shortcuts.sys.platform", "darwin"), \
+                patch("speakbar.shortcuts.subprocess.run", return_value=failed):
+            service.execute(mac_shortcut("abrir notas", str(image), "application", "Notas"))
+            self.assertTrue(finished.wait(5))
+        self.assertEqual(messages, ["Falha ao abrir Notas. hdiutil: attach failed - image not recognized"])
 
 
 

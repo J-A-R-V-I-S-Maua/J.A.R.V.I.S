@@ -354,10 +354,18 @@ os comandos. Durante um teste de transcrição, até “salvar configurações�
 texto de diagnóstico e não executa nenhuma ação.
 
 Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site,
-aplicativo (`.app` no macOS; `.exe` ou atalho `.lnk` no Windows), pasta ou recurso do
-sistema: no Windows, Explorador, Configurações, Rede ou Som; no macOS, Finder, Ajustes do
-Sistema, Rede ou Som. No macOS, a abertura usa `/usr/bin/open` com argumentos separados,
-sem shell. Atalhos de recursos do outro sistema continuam no cadastro, mas não abrem. Os exemplos apenas preenchem o formulário; clique em
+aplicativo (`.app` ou imagem `.dmg` no macOS; `.exe` ou atalho `.lnk` no Windows), pasta ou
+recurso do sistema: no Windows, Explorador, Configurações, Rede ou Som; no macOS, Finder,
+Ajustes do Sistema, Rede ou Som. No macOS, a abertura usa `/usr/bin/open` com argumentos
+separados, sem shell. Atalhos de recursos do outro sistema continuam no cadastro, mas não abrem.
+
+Um `.dmg` é montado em modo somente leitura com `hdiutil`, sem aparecer na mesa, e o
+aplicativo que está dentro dele é aberto. A barra mostra “Montando a imagem…” e, em
+seguida, o resultado; uma imagem já montada é reaproveitada. Imagens sem aplicativo ou
+com mais de um `.app` informam a falha, e as que pedem aceite de licença podem não montar
+sem interação; nesses casos, instale o aplicativo e cadastre o `.app`.
+
+Os exemplos apenas preenchem o formulário; clique em
 **Salvar** para cadastrar. **Adicionar / atualizar** permite organizar vários
 cadastros antes de salvar. **Cancelar** descarta o rascunho. **Testar abertura** abre
 explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocorre.
