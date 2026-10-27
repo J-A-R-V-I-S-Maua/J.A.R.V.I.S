@@ -114,7 +114,8 @@ O modo headless continua voltado à transcrição no terminal, usando o ambiente
   operações. Não há fallback por coordenadas ou visão computacional.
 - “Parar” por voz depende da captura e transcrição. O botão cancela a interação
   local imediatamente; uma ação nativa já enviada pode terminar depois disso.
-- Criação completa de atalhos e seleção de microfone por voz ficam para outra etapa.
+- Por voz, atalhos são criados só para aplicativos instalados no macOS; sites, pastas,
+  recursos do sistema e seleção de microfone por voz ficam para outra etapa.
 - LLM, comandos compostos, rolagem contínua/horizontal, gerenciamento de janelas, envio guiado de e-mails,
   TTS e reconhecimento independente de emergência não fazem parte desta entrega.
 

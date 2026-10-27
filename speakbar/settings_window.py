@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QF
                                QProgressBar, QPushButton, QScrollArea, QSpinBox,
                                QStackedWidget, QTextBrowser, QVBoxLayout, QWidget)
 from .preferences import defaults, validate_preferences
-from .shortcuts import SYSTEM_KIND, SYSTEM_RESOURCES, validate_shortcut, validate_shortcuts
+from screen_access.commands import parse_number
+from .shortcuts import CANCEL, SYSTEM_KIND, SYSTEM_RESOURCES, find_application, validate_shortcut, validate_shortcuts
 
 SYSTEM_KIND_LABELS = {"windows": "Recurso do Windows", "macos": "Recurso do macOS"}
 TEMPLATES = {
@@ -19,7 +20,7 @@ TEMPLATES = {
               ("Ajustes do Sistema", "Ajustes do Sistema", "abrir ajustes do sistema", "settings")),
 }
 from .settings_style import STYLE, HIGH_CONTRAST
-from .commands import settings_command, all_help
+from .commands import normalize, settings_command, all_help
 
 
 class SettingsWindow(QDialog):
@@ -33,6 +34,8 @@ class SettingsWindow(QDialog):
         self.baseline = self.store.effective
         self.draft = copy.deepcopy(self.store.shortcuts)
         self.editing = None
+        self.pending_apps = None
+        self.pending_retried = False
         self.restoring = False
         self.setWindowTitle("J.A.R.V.I.S. — Configurações")
         self.setObjectName("JarvisSettings")
@@ -118,6 +121,9 @@ class SettingsWindow(QDialog):
     def handle_voice(self, text):
         if not self.isVisible() or not self.controller.settings_open:
             return
+        if self.pending_apps is not None and self._choose_pending_app(text):
+            return
+        self.pending_apps = None
         try:
             command = settings_command(text)
             if command is None:
@@ -133,6 +139,12 @@ class SettingsWindow(QDialog):
             if key == "section":
                 self.navigation.setCurrentRow(value)
                 self._voice_notify(f"Seção {self.navigation.currentItem().text()}. Alterações ainda não salvas.")
+                return
+            if key == "create_shortcut":
+                self._create_app_shortcut(value)
+                return
+            if key == "shortcut_phrase":
+                self._change_shortcut_phrase(value)
                 return
             controls = dict(self.voice_controls, text_size=self.text_size, number_size=self.number_size)
             if key in ("high_contrast", "remember_position"):
@@ -153,6 +165,68 @@ class SettingsWindow(QDialog):
     def _voice_notify(self, text, tone="note"):
         self._notify(text, tone)
         self.controller._show_text(text)
+
+    def _create_app_shortcut(self, spoken):
+        status, apps = find_application("abrir " + spoken, self.controller.shortcut_service.applications())
+        if status == "match":
+            self._fill_app_shortcut(apps[0])
+        elif status == "ambiguous":
+            self.pending_apps, self.pending_retried = apps, False
+            listing = ", ".join(f"{number} {app.name}" for number, app in enumerate(apps, 1))
+            self._voice_notify(f"Encontrei {len(apps)} aplicativos: {listing}. Diga o número ou cancelar.")
+            self.controller._queue_capture(lambda: self.pending_apps is not None)
+        else:
+            self._voice_notify(f"Não encontrei o aplicativo “{spoken}”. Confira o nome e repita criar atalho para o aplicativo.", "error")
+
+    def _choose_pending_app(self, text):
+        """Resposta à lista de apps parecidos; False quando é outro comando do menu."""
+        apps = self.pending_apps
+        if normalize(text) in CANCEL:
+            self.pending_apps = None
+            self._voice_notify("Cadastro cancelado. Nada foi alterado.")
+            return True
+        number = parse_number(text)
+        if number is not None and number <= len(apps):
+            status, found = "match", [apps[number - 1]]
+        else:
+            status, found = find_application("abrir " + text, apps)
+        if status == "match":
+            self.pending_apps = None
+            self._fill_app_shortcut(found[0])
+            return True
+        if settings_command(text) is not None:
+            return False
+        if self.pending_retried:
+            self.pending_apps = None
+            self._voice_notify("Não consegui identificar o aplicativo. Repita criar atalho para o aplicativo.", "error")
+            return True
+        self.pending_retried = True
+        self._notify("Diga o número do aplicativo ou cancelar.")
+        self.controller._recognition_failed("Diga o número do aplicativo ou cancelar. Ouvindo novamente…")
+        return True
+
+    def _fill_app_shortcut(self, app):
+        self.navigation.setCurrentRow(0)
+        self._new_shortcut()
+        self.name.setText(app.name)
+        self.phrase.setText(f"abrir {app.name}")
+        self.kind.setCurrentIndex(self.kind.findData("application"))
+        self.destination.setText(str(app.path))
+        if self._put_shortcut():
+            self._voice_notify(f"Atalho {app.name} no rascunho com a frase “abrir {app.name}”. Diga frase do atalho e a "
+                               "nova frase para mudar, ou salvar configurações para gravar.", "success")
+        else:
+            self._voice_notify(self.status.text(), "error")
+
+    def _change_shortcut_phrase(self, spoken):
+        if not self.name.text().strip():
+            self._voice_notify("Primeiro diga criar atalho para o aplicativo desejado.", "error")
+            return
+        self.phrase.setText(spoken)
+        if self._put_shortcut():
+            self._voice_notify(f"Frase do atalho {self.name.text()}: “{spoken}”. Diga salvar configurações para gravar.", "success")
+        else:
+            self._voice_notify(self.status.text(), "error")
 
     @staticmethod
     def _button(layout, label, callback):
@@ -466,8 +540,10 @@ class SettingsWindow(QDialog):
             self.editor_title.setText("Editar atalho")
             self._refresh_shortcuts()
             self._notify("Atalho atualizado na lista. Clique em Salvar para gravar.", "success")
+            return True
         except ValueError as exc:
             self._notify(str(exc), "error")
+            return False
 
     def _delete_shortcut(self):
         key = self._selected()

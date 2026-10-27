@@ -15,7 +15,7 @@ from speakbar.controller import VoiceController
 from speakbar.interaction import InteractionCoordinator
 from speakbar.preferences import PreferencesService
 from speakbar.settings_window import SettingsWindow
-from speakbar.shortcuts import ShortcutConversation, ShortcutService
+from speakbar.shortcuts import Application, ShortcutConversation, ShortcutService
 from wakeword.detect_microphone_service import VoiceService
 from wakeword.events import State, Reason
 from wakeword.streaming_service import StreamingVoiceService, NoSpeech
@@ -287,6 +287,64 @@ class SettingsVoiceTest(ControllerFixture, unittest.TestCase):
         self.dialog.handle_voice("desativar lembrar posição")
         self.assertFalse(self.dialog.remember.isChecked())
         self.assertFalse(self.controller.preferences.path.exists())
+
+    def install_apps(self, *names):
+        apps = []
+        for name in names:
+            path = Path(self.directory.name) / f"{name}.app"
+            path.mkdir()
+            apps.append(Application(name, path))
+        self.controller.shortcut_service.catalog = lambda: apps
+        return apps
+
+    def test_spoken_shortcut_command_keeps_what_was_said(self):
+        self.assertEqual(settings_command("Criar atalho para o Safari."), ("create_shortcut", "o Safari"))
+        self.assertEqual(settings_command("novo atalho para Captura de Tela"), ("create_shortcut", "Captura de Tela"))
+        self.assertEqual(settings_command("Frase do atalho: abrir o navegador!"), ("shortcut_phrase", "abrir o navegador"))
+
+    def test_create_app_shortcut_by_voice_changes_phrase_and_saves(self):
+        safari, = self.install_apps("Safari")
+        self.dialog.handle_voice("ir para voz e microfone")
+        self.dialog.handle_voice("criar atalho para o Safari")
+        self.assertEqual(self.dialog.navigation.currentRow(), 0)
+        self.assertEqual([(item["name"], item["phrase"], item["destination"]) for item in self.dialog.draft],
+                         [("Safari", "abrir Safari", str(safari.path))])
+        self.assertIn("abrir Safari", self.controller.presentation.message)
+        self.dialog.handle_voice("frase do atalho abrir meu navegador")
+        self.assertEqual([item["phrase"] for item in self.dialog.draft], ["abrir meu navegador"])
+        self.assertFalse(self.controller.preferences.path.exists())
+        self.dialog.handle_voice("salvar configurações")
+        self.assertEqual([item["phrase"] for item in self.controller.preferences.shortcuts], ["abrir meu navegador"])
+
+    def test_similar_apps_are_chosen_by_number_with_one_retry(self):
+        self.install_apps("Captura de Imagem", "Captura de Tela")
+        self.dialog.handle_voice("criar atalho para captura")
+        self.assertIn("1 Captura de Imagem, 2 Captura de Tela", self.dialog.status.text())
+        self.assertTrue(self.service.trigger_requested.is_set())
+        self.dialog.handle_voice("dois")
+        self.assertEqual([item["name"] for item in self.dialog.draft], ["Captura de Tela"])
+        self.dialog.handle_voice("criar atalho para captura")
+        self.dialog.handle_voice("banana")
+        self.assertIsNotNone(self.dialog.pending_apps)
+        self.dialog.handle_voice("abacaxi")
+        self.assertIsNone(self.dialog.pending_apps)
+        self.dialog.handle_voice("criar atalho para captura")
+        self.dialog.handle_voice("cancelar")
+        self.assertIn("Cadastro cancelado", self.dialog.status.text())
+        self.assertEqual(len(self.dialog.draft), 1)
+
+    def test_invalid_spoken_shortcuts_are_explained(self):
+        self.install_apps("Safari")
+        self.dialog.handle_voice("frase do atalho abrir navegador")
+        self.assertIn("Primeiro diga criar atalho", self.dialog.status.text())
+        self.dialog.handle_voice("criar atalho para planilhas")
+        self.assertIn("Não encontrei o aplicativo “planilhas”", self.dialog.status.text())
+        self.dialog.handle_voice("criar atalho para Safari")
+        self.dialog.handle_voice("frase do atalho abrir configurações")
+        self.assertIn("reservada", self.dialog.status.text())
+        self.dialog.handle_voice("criar atalho para Safari")
+        self.assertIn("Já existe um atalho", self.dialog.status.text())
+        self.assertEqual([item["phrase"] for item in self.dialog.draft], ["abrir Safari"])
 
 
 class DialogueTest(unittest.TestCase):

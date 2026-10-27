@@ -346,10 +346,17 @@ Use **Hey Jarvis** antes de cada comando de menu:
 - **Tamanho do texto 22**, **tamanho dos números 18**.
 - **Tempo de silêncio 3 segundos**, **tempo para começar a falar 15 segundos**,
   **duração máxima 30 segundos**, **limiar de ativação 0,3**.
+- **Criar atalho para Safari** (macOS): procura o aplicativo instalado, vai para a seção
+  Atalhos e coloca no rascunho um atalho com a frase “abrir Safari”. Com nomes parecidos,
+  a barra numera as opções e escuta a resposta: diga o número, parte do nome ou **cancelar**;
+  há uma nova tentativa. Também aceita “novo atalho para…”.
+- **Frase do atalho abrir meu navegador**: troca a frase do atalho que está no formulário.
+  Frases reservadas ou repetidas são recusadas com a explicação.
 
 Números também podem ser ditos por extenso, como “vinte e dois” e “zero vírgula três”.
-Valores fora dos limites são recusados. Ajustes ficam no rascunho até salvar; seleção
-de microfone e cadastro de atalhos continuam no formulário. Diga **ajuda** para consultar
+Valores fora dos limites são recusados. Ajustes e atalhos criados por voz ficam no
+rascunho até **salvar configurações**; a seleção de microfone e os atalhos de sites, pastas
+e recursos do sistema continuam no formulário. Diga **ajuda** para consultar
 os comandos. Durante um teste de transcrição, até “salvar configurações” é apenas
 texto de diagnóstico e não executa nenhuma ação.
 

@@ -21,7 +21,7 @@ HELP = {
     "shortcut": "Diga a frase cadastrada nas configurações, o número ou o nome do aplicativo, ou cancelar.",
     "scroll_waiting": "Diga mais, para cima, para baixo, role um pouco para baixo ou role uma página para cima. Parar, cancelar ou silêncio encerra a rolagem.",
     "scroll_choosing": "Diga o número de uma das áreas roláveis exibidas ou cancelar. A rolagem será executada diretamente nessa área.",
-    "settings": "Diga ir para atalhos, ir para voz e microfone, ir para aparência e acessibilidade, ir para ajuda e diagnóstico, salvar configurações ou fechar configurações. Ajustes: tamanho do texto 22, tamanho dos números 18, ativar alto contraste, ativar lembrar posição, tempo de silêncio 3 segundos, tempo para começar a falar 15 segundos, duração máxima 30 segundos, limiar de ativação 0,3. Use desativar para desligar as opções.",
+    "settings": "Diga ir para atalhos, ir para voz e microfone, ir para aparência e acessibilidade, ir para ajuda e diagnóstico, salvar configurações ou fechar configurações. Ajustes: tamanho do texto 22, tamanho dos números 18, ativar alto contraste, ativar lembrar posição, tempo de silêncio 3 segundos, tempo para começar a falar 15 segundos, duração máxima 30 segundos, limiar de ativação 0,3. Use desativar para desligar as opções. Atalhos: criar atalho para Safari e frase do atalho abrir navegador.",
 }
 RESERVED = SETTINGS_COMMANDS | HELP_COMMANDS | {"cancelar", "cancele", "nao", "parar", "pare", "sim", "confirmar", "confirme", "executar atalho"}
 
@@ -68,6 +68,11 @@ def portuguese_number(text):
         raise ValueError("Informe um número válido.") from exc
 
 
+def spoken_tail(text, words):
+    """O que vem depois das primeiras palavras, como foi falado (com acentos e maiúsculas)."""
+    return " ".join(text.split()[words:]).strip(" .,;:!?")
+
+
 def settings_command(text):
     """Retorna uma intenção restrita ao rascunho, sem referências a widgets."""
     phrase = normalize(text)
@@ -79,6 +84,11 @@ def settings_command(text):
         return "save", None
     if phrase in ("cancelar configuracoes", "fechar configuracoes"):
         return "close", None
+    for prefix in ("criar um atalho para", "criar atalho para", "novo atalho para", "criar atalho"):
+        if phrase.startswith(prefix + " "):
+            return "create_shortcut", spoken_tail(text, len(prefix.split()))
+    if phrase.startswith("frase do atalho "):
+        return "shortcut_phrase", spoken_tail(text, 3)
     for prefix, enabled in (("ativar ", True), ("desativar ", False)):
         for label, key in (("alto contraste", "high_contrast"), ("lembrar posicao", "remember_position")):
             if phrase == prefix + label:
