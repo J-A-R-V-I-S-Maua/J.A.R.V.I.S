@@ -424,15 +424,19 @@ class AudioPreferencesTest(unittest.TestCase):
             bar.deleteLater()
             APP.processEvents()
 
-    def test_windows_settings_template_does_not_use_reserved_phrase(self):
-        with tempfile.TemporaryDirectory() as directory:
-            controller = DemoController()
-            controller.preferences = PreferencesService(Path(directory) / "settings.json")
-            dialog = SettingsWindow(controller, demo=True)
-            dialog._template("Configurações")
-            dialog._save()
-            self.assertEqual(controller.preferences.shortcuts[0]["phrase"], "abrir configurações do Windows")
-            dialog.deleteLater()
+    def test_system_settings_template_does_not_use_reserved_phrase(self):
+        for system, template, phrase in (("windows", "Configurações", "abrir configurações do Windows"),
+                                         ("macos", "Ajustes do Sistema", "abrir ajustes do sistema")):
+            with self.subTest(system=system), tempfile.TemporaryDirectory() as directory, \
+                    patch("speakbar.settings_window.SYSTEM_KIND", system):
+                controller = DemoController()
+                controller.preferences = PreferencesService(Path(directory) / "settings.json")
+                dialog = SettingsWindow(controller, demo=True)
+                dialog._template(template)
+                dialog._save()
+                self.assertEqual(controller.preferences.shortcuts[0]["phrase"], phrase)
+                self.assertEqual(controller.preferences.shortcuts[0]["kind"], system)
+                dialog.deleteLater()
 
     def test_audio_restart_waits_for_finished_and_overrides_environment_device(self):
         with tempfile.TemporaryDirectory() as directory:
