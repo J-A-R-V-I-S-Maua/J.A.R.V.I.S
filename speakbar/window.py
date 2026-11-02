@@ -140,6 +140,8 @@ class Speakbar(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # No macOS, janelas Tool somem quando o aplicativo fica inativo, e controlar outro app é o caso de uso.
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setWindowIcon(make_icon())
         self._drag_offset = None
         self.controller = controller or (DemoController(self) if demo else VoiceController(self))

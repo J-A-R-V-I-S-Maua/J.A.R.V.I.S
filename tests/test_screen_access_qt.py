@@ -105,6 +105,18 @@ class OverlayTest(unittest.TestCase):
         self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating))
         window.deleteLater()
 
+    def test_overlay_stays_visible_when_another_app_is_active_on_macos(self):
+        window = MarkerWindow(APP.primaryScreen())
+        self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))
+        window.deleteLater()
+
+    def test_speakbar_stays_visible_when_another_app_is_active_on_macos(self):
+        from speakbar.window import Speakbar
+
+        bar = Speakbar(demo=True)
+        self.assertTrue(bar.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))
+        bar.deleteLater()
+
 
 class ControllerFlowTest(unittest.TestCase):
     def test_background_read_auto_capture_confirm_and_shutdown(self):

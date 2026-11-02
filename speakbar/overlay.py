@@ -63,6 +63,8 @@ class MarkerWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # No macOS, janelas Tool somem quando o aplicativo fica inativo, e controlar outro app é o caso de uso.
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setGeometry(screen.geometry())
         self.markers = []
