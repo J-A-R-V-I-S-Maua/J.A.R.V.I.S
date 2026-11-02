@@ -1,10 +1,11 @@
 """Acesso à árvore de acessibilidade no macOS (AX API, via pyobjc)."""
 
-from AppKit import NSWorkspace
+from AppKit import NSRunningApplication, NSWorkspace
 from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
     AXUIElementCreateApplication,
+    AXUIElementIsAttributeSettable,
     AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
     AXValueGetValue,
@@ -36,6 +37,17 @@ def frontmost_application():
     """Devolve (pid, nome) do aplicativo que está em primeiro plano agora."""
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     return app.processIdentifier(), app.localizedName()
+
+
+def pid_for_bundle(bundle_id):
+    """pid do processo de um aplicativo pelo identificador (ex.: com.apple.dock), ou None."""
+    apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id)
+    return apps[0].processIdentifier() if apps else None
+
+
+def application_element(pid):
+    """Elemento que representa o aplicativo inteiro (a raiz da árvore dele)."""
+    return AXUIElementCreateApplication(pid)
 
 
 WEB_ACCESSIBILITY_ATTRIBUTES = ("AXManualAccessibility", "AXEnhancedUserInterface")
@@ -94,6 +106,23 @@ def can_press(element):
     return error == kAXErrorSuccess and kAXPressAction in (actions or ())
 
 
+def action_names(element):
+    """Nomes das ações que o elemento declara (AXPress, AXOpen, AXShowMenu...)."""
+    error, actions = AXUIElementCopyActionNames(element, None)
+    return tuple(actions or ()) if error == kAXErrorSuccess else ()
+
+
+def is_settable(element, name):
+    """Verdadeiro se o atributo existe e o aplicativo aceita que ele seja alterado."""
+    error, settable = AXUIElementIsAttributeSettable(element, name, None)
+    return error == kAXErrorSuccess and bool(settable)
+
+
+def focused_element(pid):
+    """O controle que tem o foco do teclado dentro do aplicativo, ou None."""
+    return read_attribute(AXUIElementCreateApplication(pid), "AXFocusedUIElement")
+
+
 AX_ERRORS = {
     -25200: "falha genérica",
     -25202: "elemento inválido (a tela provavelmente mudou)",
@@ -105,9 +134,14 @@ AX_ERRORS = {
 }
 
 
+def perform_action(element, name):
+    """Executa uma ação nativa pelo nome (AXOpen, AXShowMenu...). Devolve o código de erro; 0 = aceito."""
+    return AXUIElementPerformAction(element, name)
+
+
 def press(element):
     """Aciona o elemento (AXPress), sem mover o cursor. Devolve o código de erro; 0 = aceito."""
-    return AXUIElementPerformAction(element, kAXPressAction)
+    return perform_action(element, kAXPressAction)
 
 
 def describe_error(code):
