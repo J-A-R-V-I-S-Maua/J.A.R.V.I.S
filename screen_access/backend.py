@@ -164,4 +164,7 @@ def get_backend():
     if sys.platform == "darwin":
         from .macos_backend import MacOSBackend
         return MacOSBackend()
+    if sys.platform == "linux":
+        from .linux import LinuxBackend
+        return LinuxBackend()
     raise ScreenError("Acesso à tela disponível somente no Windows e macOS.")
