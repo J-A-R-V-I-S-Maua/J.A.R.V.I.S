@@ -1,12 +1,14 @@
+import sys
 import unittest
 import time
-from unittest.mock import Mock
+from types import ModuleType
+from unittest.mock import Mock, patch
 from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtWidgets import QApplication
 from screen_access.backend import Element
 from screen_access.session import ActionView, ActionState
 from speakbar.controller import VoiceController, DemoController
-from speakbar.overlay import MarkerWindow, convert_frame, monitor_for_screen
+from speakbar.overlay import MarkerWindow, convert_frame, keep_above_dock, monitor_for_screen
 from wakeword.detect_microphone_service import VoiceService
 from wakeword.events import State, VoiceEvent
 
@@ -104,6 +106,65 @@ class OverlayTest(unittest.TestCase):
         self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
         self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating))
         window.deleteLater()
+
+    def test_overlay_stays_visible_when_another_app_is_active_on_macos(self):
+        window = MarkerWindow(APP.primaryScreen())
+        self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))
+        window.deleteLater()
+
+    def test_speakbar_stays_visible_when_another_app_is_active_on_macos(self):
+        from speakbar.window import Speakbar
+
+        bar = Speakbar(demo=True)
+        self.assertTrue(bar.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))
+        bar.deleteLater()
+
+
+class KeepAboveDockTest(unittest.TestCase):
+    """O Dock fica na camada 20 do macOS; o "sempre no topo" do Qt só chega à 3."""
+
+    def fake_cocoa(self, window):
+        objc = ModuleType("objc")
+        objc.objc_object = Mock(return_value=Mock(window=Mock(return_value=window)))
+        appkit = ModuleType("AppKit")
+        appkit.NSStatusWindowLevel = 25
+        return objc, appkit
+
+    def run_on(self, platform, window):
+        objc, appkit = self.fake_cocoa(window)
+        widget = Mock(winId=Mock(return_value=1234))
+        with patch.object(sys, "platform", platform), patch.dict(sys.modules, {"objc": objc, "AppKit": appkit}):
+            keep_above_dock(widget)
+        return objc
+
+    def test_no_macos_sobe_a_camada_para_acima_do_dock(self):
+        window = Mock()
+        objc = self.run_on("darwin", window)
+        objc.objc_object.assert_called_once_with(c_void_p=1234)
+        window.setLevel_.assert_called_once_with(25)
+        self.assertGreater(25, 20)  # camada do Dock
+
+    def test_fora_do_macos_nao_faz_nada(self):
+        window = Mock()
+        objc = self.run_on("win32", window)
+        objc.objc_object.assert_not_called()
+        window.setLevel_.assert_not_called()
+
+    def test_janela_nativa_ainda_inexistente_nao_quebra(self):
+        self.run_on("darwin", None)
+
+    def test_falha_do_cocoa_nao_derruba_a_interface(self):
+        window = Mock()
+        window.setLevel_.side_effect = RuntimeError("cocoa indisponível")
+        self.run_on("darwin", window)
+
+    def test_ao_mostrar_a_janela_de_marcadores_a_camada_e_ajustada(self):
+        with patch("speakbar.overlay.keep_above_dock") as raised:
+            window = MarkerWindow(APP.primaryScreen())
+            window.show()
+            raised.assert_called_once_with(window)
+            window.close()
+            window.deleteLater()
 
 
 class ControllerFlowTest(unittest.TestCase):

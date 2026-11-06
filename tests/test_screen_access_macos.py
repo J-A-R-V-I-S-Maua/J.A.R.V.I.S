@@ -19,6 +19,7 @@ class MacOSBackendTest(unittest.TestCase):
         macos.element_name = Mock(side_effect=lambda element: element)
         macos.read_attribute = Mock(side_effect=lambda element, attribute: 1 if attribute == "AXWindowNumber" else True)
         macos.enable_web_accessibility = Mock()
+        macos.pid_for_bundle = Mock(return_value=None)  # o aplicativo da frente não é o Finder
         macos.walk_with_clip = Mock(return_value=iter([(0, "button", (0, 0, 800, 600)), (1, "field", (0, 0, 800, 600))]))
         macos.TEXT_INPUT_ROLES = {"AXTextField"}
         macos.ACTION_ROLES = {"AXButton"}
