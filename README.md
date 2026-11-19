@@ -99,7 +99,7 @@ basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
 
-### Rolagem por voz (Windows)
+### Rolagem por voz (Windows e macOS)
 
 Diga **Hey Jarvis** e **“role para baixo”** ou **“role para cima”**. A rolagem é
 executada diretamente, sem confirmação. Também aceita “rolar para baixo”, “descer
@@ -143,9 +143,17 @@ para escolher um controle (a ação ainda exige confirmação), ou continue rola
 Uma confirmação pendente precisa ser concluída ou cancelada antes de rolar.
 Durante ditado, “role para baixo” é texto literal. Trocar de janela encerra a sessão.
 
-O suporte usa `ScrollPattern` do UI Automation, sem roda do mouse ou teclas como
+No Windows, o suporte usa `ScrollPattern` do UI Automation, sem roda do mouse ou teclas como
 fallback. Aplicativos que não expõem esse padrão, incluindo alguns componentes Qt,
 informam indisponibilidade. A versão atual não inclui rolagem horizontal nem contínua.
+
+No macOS, aplicativos nativos (Finder, Notas, Ajustes) expõem a barra de rolagem pela
+acessibilidade, e a rolagem funciona como no Windows, com posição e início/fim. Páginas web
+e aplicativos Electron (Chrome, Cursor, WhatsApp) não expõem a barra: neles, o J.A.R.V.I.S.
+envia a rolagem do trackpad no centro da área rolável (ou da janela, quando nenhuma área
+aparece), em passos suaves, sem mover o cursor nem clicar. Antes, confere se a janela do
+aplicativo é a que está por cima naquele ponto; outra janela por cima cancela a rolagem.
+Como a página não informa a posição, a barra mostra **“Rolagem solicitada ao aplicativo”**.
 O teste isolado `.venv\Scripts\python.exe tests/scroll_native_check.py` verifica
 duas áreas nativas, as intensidades, direções, limites e cancelamento.
 
@@ -194,9 +202,28 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
 - **“Enter”** (Windows): pede confirmação e envia Enter ao campo de texto ativo.
   Em campos de pesquisa, executa o comportamento de pesquisa do aplicativo; em
   editores de várias linhas, pode inserir uma nova linha. Também aceita **“pressionar enter”**.
-- **“Deletar”** (Windows): pede confirmação e apaga **todo o conteúdo do campo ativo**,
-  incluindo texto que já existia antes da última ditagem. Também aceita **“limpar campo”**
-  e **“apagar tudo”**. Sem campo editável ativo, solicita que você selecione um.
+- **“Deletar”** (Windows e macOS): pede confirmação e apaga **todo o conteúdo do campo ativo**,
+  incluindo texto que já existia antes da última ditagem. Também aceita **“apagar tudo”**,
+  **“limpar campo”**, “apaga tudo”, “limpa o campo” e “deleta”. Sem campo editável ativo,
+  solicita que você selecione um. “Apagar tudo” é a forma que o reconhecimento erra menos.
+- **“Selecionar a palavra olá”** ou **“selecionar o texto bom dia”** (macOS): seleciona o
+  trecho no campo ativo, sem acentos nem maiúsculas fazendo diferença e tolerando os erros
+  comuns da transcrição (“o lá” por “olá”). Se ele aparecer mais de uma vez, fica o mais perto
+  antes do cursor, em geral o que acabou de ser ditado. Também há **“selecionar tudo”** e
+  **“selecionar a última palavra”**. Selecionar não altera o texto, então não pede confirmação.
+  “Selecionar [nome]” sozinho continua sendo o clique no controle com esse nome.
+- **“Copiar texto”**, **“recortar texto”** e **“colar texto”** (macOS): funcionam no campo
+  ativo, como Cmd+C, Cmd+X e Cmd+V. “Copiar”, “recortar” e “colar” sozinhos também valem,
+  mas com “texto” o reconhecimento erra menos. Copiar é direto e confere na área de
+  transferência se a cópia aconteceu de fato. Recortar e colar pedem **“confirmar”**; o colar
+  mostra antes o que vai ser colado (“Colar ‘bom dia’ em Mensagem?”) e não cola se a área de
+  transferência mudar depois da pergunta. Sem nada selecionado, copiar e recortar avisam em
+  vez de seguir. Exemplo: “selecionar a palavra olá”, “copiar texto”; depois, em outro campo,
+  “colar texto” e “confirmar”.
+- Os comandos de campo (deletar, copiar, recortar, colar, Enter) também aceitam frases que
+  apenas soam como eles, como “Polar texto” ou “Impar campo”, trocas comuns da transcrição.
+  Isso só vale quando nenhum outro comando se encaixa e quando um único comando soa parecido;
+  as ações que alteram o texto continuam pedindo confirmação.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens
@@ -388,7 +415,7 @@ não são alterados. Os destinos locais e o catálogo do sistema são priorizado
 | `STREAM_MAX_SECONDS` | `30` | Duração máxima da interação, incluindo espera inicial. |
 | `STREAM_PRE_ROLL_SECONDS` | `0.8` | Áudio preservado antes da confirmação de voz; aceita valores positivos até 2 segundos. |
 | `MICROPHONE_DEVICE_INDEX` | dispositivo padrão | Índice da entrada de áudio do host; consulte `--list-microphones`. |
-| `WHISPER_INITIAL_PROMPT` | vazio | Contexto opcional do Whisper no container `realtime`; exige recriar o serviço. |
+| `WHISPER_INITIAL_PROMPT` | vocabulário dos comandos | Contexto do Whisper no container `realtime`. O padrão lista os comandos (“deletar”, “limpar campo”, “copiar”…), que sem ele saem trocados; um valor próprio substitui o padrão. Exige recriar o serviço. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
 

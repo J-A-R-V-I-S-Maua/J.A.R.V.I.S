@@ -3,7 +3,18 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 import time
-from .commands import CANCEL, FIELD_COMMANDS, Reply, action_command, classify_reply, normalized, parse_number
+from .commands import (
+    CANCEL,
+    CONFIRM,
+    FIELD_COMMANDS,
+    action_command,
+    field_command,
+    normalized,
+    parse_number,
+    select_command,
+    Reply,
+    classify_reply
+)
 from .matching import choose
 from .scroll import parse_scroll, ScrollOutcome
 
@@ -56,6 +67,7 @@ class ScreenSession:
         self.dictation_text = None
         self.is_dictation = False
         self.pending_action = "activate"
+        self.selection = None  # ("all"|"last_word"|"text", trecho) enquanto o campo é procurado
         self.retry_count = 0
         self.deadline = None
         self._step = self.state
@@ -129,6 +141,7 @@ class ScreenSession:
         self.dictation_text = None
         self.is_dictation = False
         self.pending_action = "activate"
+        self.selection = None
         self._reset_scroll()
         self.view(text)
 
@@ -230,23 +243,40 @@ class ScreenSession:
                 self.select(self.pending_phrase)
         elif kind == "prepare_dictation":
             self.snapshot = data
-            if self.pending_action in ("press_enter", "clear_text"):
+            if self.pending_action in ("select_text", "copy_text"):
+                # Selecionar e copiar não alteram o texto: vão direto, sem pedir confirmação.
+                select = self.pending_action == "select_text"
+                self.state = ActionState.EXECUTING
+                self.token += 1
+                self.view("Selecionando…" if select else "Copiando…")
+                self.executor.submit(self.token, self.pending_action, data, self.selection if select else 1)
+            elif self.pending_action in ("press_enter", "clear_text", "cut_text"):
                 self.selected = 1
                 self.state = ActionState.CONFIRMING
                 name = data.elements[0].name or "campo ativo"
-                label = "Pressionar Enter em" if self.pending_action == "press_enter" else "Apagar todo o conteúdo de"
+                label = {"press_enter": "Pressionar Enter em", "clear_text": "Apagar todo o conteúdo de",
+                         "cut_text": "Recortar o texto selecionado de"}[self.pending_action]
                 self.view(f"{label} {name}? Diga confirmar ou cancelar.", capture=True)
             elif self.dictation_text:
                 self.confirm_dictation()
             else:
                 self.state = ActionState.DICTATING
                 self.view("Diga o texto para o campo ativo ou cancelar.", capture=True)
+        elif kind == "prepare_paste":
+            # O conteúdo vai na pergunta: a pessoa não vê a área de transferência.
+            self.snapshot, preview = data
+            self.selected = 1
+            self.state = ActionState.CONFIRMING
+            name = self.snapshot.elements[0].name or "campo ativo"
+            self.view(f"Colar “{preview}” em {name}? Diga confirmar ou cancelar.", capture=True)
         elif kind == "dictate":
             self.cancel("Texto inserido no campo.")
         elif kind == "clear_text":
             self.cancel("Conteúdo do campo apagado.")
         elif kind == "press_enter":
             self.cancel("Enter enviado ao campo.")
+        elif kind in ("select_text", "copy_text", "cut_text", "paste_text"):
+            self.cancel(data)
         elif kind in ("activate", "open_item", "context_menu"):
             self.cancel("Pedido aceito pelo aplicativo.")
         elif kind == "mission_control":
@@ -318,7 +348,8 @@ class ScreenSession:
                     self.executor.submit(self.token, "dictate", self.snapshot, self.dictation_text)
                 else:
                     self.view({"context_menu": "Abrindo menu de contexto…", "press_enter": "Enviando Enter…",
-                               "clear_text": "Apagando conteúdo do campo…"}.get(self.pending_action, "Acionando controle…"))
+                               "clear_text": "Apagando conteúdo do campo…", "cut_text": "Recortando…",
+                               "paste_text": "Colando…"}.get(self.pending_action, "Acionando controle…"))
                     self.executor.submit(self.token, self.pending_action, self.snapshot, self.selected)
             else:
                 self.retry("Confirmação inválida. Diga confirmar ou cancelar. Ouvindo novamente…")
@@ -369,10 +400,17 @@ class ScreenSession:
             return True  # Uma operação em andamento não aceita uma segunda ação.
         command = action_command(text)
         field_action = FIELD_COMMANDS.get(phrase)
+        selection = select_command(text)
+        if selection is not None:
+            # "Selecionar tudo" também casa com o clique ("selecionar" + controle "tudo"); o texto vence.
+            command, field_action = None, "select_text"
         target = command[1] if command else None
         # O texto ditado preserva acentos, caixa e pontuação da transcrição final.
         dictation = re.match(r"^\s*digitar\b[\s,:;.!?]*(.*)$", text, re.IGNORECASE)
         show = phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"}
+        if not show and target is None and dictation is None and field_action is None:
+            # Último recurso: uma frase que soa como um comando de campo ("Polar texto" por "colar texto").
+            field_action = field_command(text) if command is None else None
         if not show and target is None and dictation is None and field_action is None:
             return False
         if command and not target:
@@ -389,10 +427,12 @@ class ScreenSession:
         self.dictation_text = dictation.group(1).strip() or None if dictation else None
         self.pending_phrase = None if show else target
         self.pending_action = field_action or (command[0] if command else "activate")
+        self.selection = selection
         self.token += 1
         if self.is_dictation or field_action:
             self.view("Identificando campo de texto ativo…")
-            self.executor.submit(self.token, "prepare_dictation", self.target)
+            self.executor.submit(self.token, "prepare_paste" if field_action == "paste_text" else "prepare_dictation",
+                                 self.target)
         else:
             self.view("Lendo controles da janela…")
             self.executor.submit(self.token, "scan", self.target, self.max_depth, self.max_elements, False)

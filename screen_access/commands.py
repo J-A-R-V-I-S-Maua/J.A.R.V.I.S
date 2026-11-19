@@ -1,4 +1,5 @@
 """Comandos explícitos e números PT-BR, sem interpretar fala livre como ação."""
+from .matching import MIN_MARGIN, tokenize, word_similarity
 from .matching import tokenize
 from difflib import SequenceMatcher
 from enum import Enum
@@ -86,6 +87,17 @@ FIELD_COMMANDS = {
     "enter": "press_enter", "pressionar enter": "press_enter", "pressione enter": "press_enter",
     "apertar enter": "press_enter", "deletar": "clear_text", "delete": "clear_text",
     "apagar tudo": "clear_text", "limpar campo": "clear_text",
+    # Formas naturais da mesma ordem; "apagar tudo" é a que o reconhecimento erra menos.
+    "deleta": "clear_text", "deletar tudo": "clear_text", "apaga tudo": "clear_text",
+    "limpa o campo": "clear_text", "limpar o campo": "clear_text", "limpa campo": "clear_text",
+    "apagar o campo": "clear_text", "apaga o campo": "clear_text",
+    # Com "texto" o reconhecimento acerta mais: "colar" sozinho às vezes sai "Polar" ou "Blood".
+    "copiar texto": "copy_text", "copiar": "copy_text", "copie": "copy_text", "copia": "copy_text",
+    "copiar o texto": "copy_text", "copiar selecao": "copy_text", "copiar a selecao": "copy_text",
+    "recortar texto": "cut_text", "recortar": "cut_text", "recorte": "cut_text", "recorta": "cut_text",
+    "recortar o texto": "cut_text", "recortar selecao": "cut_text", "recortar a selecao": "cut_text",
+    "colar texto": "paste_text", "colar": "paste_text", "cole": "paste_text", "cola": "paste_text",
+    "colar o texto": "paste_text", "colar aqui": "paste_text", "cole aqui": "paste_text",
 }
 
 
@@ -131,3 +143,45 @@ def parse_number(text):
     if value.isdigit():
         return int(value) if 1 <= int(value) <= 200 else None
     return NUMBERS.get(value)
+
+
+SELECT_VERB = r"(?:selecionar|selecione|seleciona)"
+
+
+def select_command(text):
+    """Seleção de texto no campo ativo: ("all"|"last_word"|"text", trecho) ou None.
+
+    Só formas explícitas: "selecionar X" sozinho continua sendo o clique no controle X.
+    """
+    phrase = normalized(text)
+    if re.fullmatch(SELECT_VERB + r" (?:tudo|todo o texto)", phrase):
+        return "all", None
+    if re.fullmatch(SELECT_VERB + r" (?:a )?ultima palavra", phrase):
+        return "last_word", None
+    match = re.fullmatch(SELECT_VERB + r" (?:a palavra|as palavras|o texto|o trecho) (.+)", phrase)
+    return ("text", match[1]) if match else None
+
+
+def field_command(text):
+    """Comando de campo da frase: exato, ou o único que soa como ela ("Polar texto" é colar texto).
+
+    A transcrição troca palavras curtas por outras parecidas. Só aceita quando todas as palavras
+    soam como as de um comando e nenhuma ação diferente fica perto; nunca adivinha.
+    """
+    phrase = normalized(text)
+    if phrase in FIELD_COMMANDS:
+        return FIELD_COMMANDS[phrase]
+    words = phrase.split()
+    scored = {}
+    for key, action in FIELD_COMMANDS.items():
+        parts = key.split()
+        if len(parts) != len(words):
+            continue
+        scores = [word_similarity(word, part) for word, part in zip(words, parts)]
+        if min(scores, default=0) > 0:
+            scored[action] = max(scored.get(action, 0), sum(scores) / len(scores))
+    ranked = sorted(scored.items(), key=lambda item: -item[1])
+    if not ranked or (len(ranked) > 1 and ranked[0][1] - ranked[1][1] < MIN_MARGIN):
+        return None
+    return ranked[0][0]
+

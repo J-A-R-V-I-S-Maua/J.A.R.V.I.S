@@ -1,6 +1,6 @@
 import unittest
 
-from screen_access.matching import choose
+from screen_access.matching import choose, find_in_text, last_word
 
 # Nomes reais de itens da página inicial do YouTube; "" é um item sem nome.
 NAMES = [
@@ -92,6 +92,33 @@ class ChooseTest(unittest.TestCase):
         self.assertEqual(sound_key("cant"), sound_key("kant"))
         self.assertEqual(sound_key("quero"), sound_key("kero"))
         self.assertNotEqual(sound_key("cena"), sound_key("kena"))
+
+
+
+class FindInTextTest(unittest.TestCase):
+    TEXT = "Olá Maria, olá de novo. Bom dia!"
+
+    def span(self, phrase, cursor=None):
+        found = find_in_text(self.TEXT, phrase, cursor)
+        return (self.TEXT[found[0]:found[1]], found[2]) if found else None
+
+    def test_ignora_acento_e_caixa_e_conta_as_ocorrencias(self):
+        self.assertEqual(self.span("ola"), ("Olá", 2))
+        self.assertEqual(self.span("BOM DIA"), ("Bom dia", 1))
+
+    def test_fica_com_a_ocorrencia_mais_perto_antes_do_cursor(self):
+        self.assertEqual(find_in_text(self.TEXT, "ola", cursor=20)[:2], (11, 14))
+        self.assertEqual(find_in_text(self.TEXT, "ola", cursor=0)[:2], (0, 3))  # nenhuma antes: a primeira
+
+    def test_palavra_que_a_transcricao_separou_ou_trocou(self):
+        self.assertEqual(self.span("o la"), ("Olá", 2))
+        self.assertEqual(self.span("mariah"), ("Maria", 1))
+        self.assertIsNone(self.span("xyz"))
+
+    def test_ultima_palavra(self):
+        self.assertEqual(last_word(self.TEXT), (28, 31))
+        self.assertEqual(last_word(self.TEXT, cursor=9), (4, 9))
+        self.assertIsNone(last_word("...", cursor=3))
 
 
 if __name__ == "__main__":

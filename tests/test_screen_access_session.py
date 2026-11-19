@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 from screen_access.backend import Element, Snapshot, Window
-from screen_access.commands import Reply, action_command, classify_reply, number_name, parse_number
+from screen_access.commands import Reply, action_command, classify_reply, number_name, parse_number, select_command
 from screen_access.session import ActionState, ScreenSession
 
 
@@ -235,6 +235,16 @@ class SessionTest(unittest.TestCase):
             self.session.receive(self.session.token, action, None)
             self.assertFalse(self.session.active)
 
+    def test_delete_accepts_the_natural_ways_of_saying_it(self):
+        # Formas que o Whisper entrega com o prompt de comandos, com pontuação e maiúsculas.
+        for phrase in ("Apaga tudo!", "Apagar tudo.", "Limpa o campo.", "Limpar campo", "Deleta", "Deletar tudo"):
+            with self.subTest(phrase=phrase):
+                self.session.cancel()
+                self.session.begin_capture()
+                self.assertTrue(self.session.handle(phrase))
+                self.assertEqual(self.executor.submit.call_args.args[1:], ("prepare_dictation", self.snapshot.window))
+                self.assertEqual(self.session.pending_action, "clear_text")
+
     def test_delete_cancel_invalid_confirmation_and_late_reply(self):
         for response in ("cancelar", "talvez"):
             self.session.begin_capture()
@@ -336,6 +346,123 @@ class MissionControlSessionTest(unittest.TestCase):
         self.assertFalse(self.session.active)
         self.assertEqual(self.views[-1].text, "O Mission Control não abriu. Tente de novo.")
 
+
+
+class SelectTextSessionTest(unittest.TestCase):
+    def setUp(self):
+        self.executor = Mock()
+        self.views = []
+        self.session = ScreenSession(self.executor, self.views.append)
+        self.snapshot = snapshot()
+        self.session.receive(0, "foreground", self.snapshot.window)
+        self.session.begin_capture()
+
+    def test_formas_explicitas_e_clique_por_nome_preservado(self):
+        self.assertEqual(select_command("Selecionar tudo."), ("all", None))
+        self.assertEqual(select_command("Selecione a última palavra"), ("last_word", None))
+        self.assertEqual(select_command("Selecionar a palavra o lá."), ("text", "o la"))
+        self.assertEqual(select_command("selecionar o texto bom dia"), ("text", "bom dia"))
+        self.assertIsNone(select_command("selecionar pesquisar"))
+        self.assertEqual(action_command("selecionar pesquisar"), ("activate", "pesquisar"))
+
+    def test_seleciona_sem_pedir_confirmacao(self):
+        self.assertTrue(self.session.handle("Selecionar a palavra olá"))
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("prepare_dictation", self.snapshot.window))
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("select_text", self.snapshot, ("text", "ola")))
+        self.assertEqual(self.session.state, ActionState.EXECUTING)
+        self.session.receive(self.session.token, "select_text", "Selecionado: “olá”.")
+        self.assertFalse(self.session.active)
+        self.assertEqual(self.views[-1].text, "Selecionado: “olá”.")
+
+    def test_selecionar_tudo_nao_vira_clique_no_controle_tudo(self):
+        self.session.handle("selecionar tudo")
+        self.assertEqual(self.executor.submit.call_args.args[1], "prepare_dictation")
+        self.assertEqual(self.session.pending_action, "select_text")
+
+    def test_erro_aparece_e_encerra(self):
+        self.session.handle("selecionar o texto xyz")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.session.receive(self.session.token, "error", "Não encontrei “xyz” no campo.")
+        self.assertFalse(self.session.active)
+        self.assertIsNone(self.session.selection)
+        self.assertEqual(self.views[-1].text, "Não encontrei “xyz” no campo.")
+
+
+
+class ClipboardSessionTest(unittest.TestCase):
+    setUp = SelectTextSessionTest.setUp
+
+    def found_field(self, phrase, prepare="prepare_dictation"):
+        self.assertTrue(self.session.handle(phrase))
+        self.assertEqual(self.executor.submit.call_args.args[1:], (prepare, self.snapshot.window))
+
+    def test_frases_com_texto_e_palavras_soltas(self):
+        for phrase, action in (("Copiar texto.", "copy_text"), ("copiar", "copy_text"), ("Recortar texto", "cut_text"),
+                               ("Colar texto.", "paste_text"), ("cole aqui", "paste_text")):
+            with self.subTest(phrase=phrase):
+                self.session.cancel()
+                self.session.begin_capture()
+                self.session.handle(phrase)
+                self.assertEqual(self.session.pending_action, action)
+
+    def test_copiar_vai_direto(self):
+        self.found_field("copiar texto")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("copy_text", self.snapshot, 1))
+        self.session.receive(self.session.token, "copy_text", "Copiado: “olá”.")
+        self.assertEqual(self.views[-1].text, "Copiado: “olá”.")
+        self.assertFalse(self.session.active)
+
+    def test_recortar_pede_confirmacao(self):
+        self.found_field("recortar texto")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+        self.assertIn("Recortar o texto selecionado", self.views[-1].text)
+        count = self.executor.submit.call_count
+        self.session.handle("cancelar")
+        self.assertEqual(self.executor.submit.call_count, count)
+
+    def test_colar_mostra_o_que_vai_colar_e_espera_confirmar(self):
+        self.found_field("colar texto", prepare="prepare_paste")
+        self.session.receive(self.session.token, "prepare_paste", (self.snapshot, "bom dia"))
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+        self.assertTrue(self.views[-1].text.startswith("Colar “bom dia” em"))
+        self.session.handle("confirmar")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("paste_text", self.snapshot, 1))
+        self.assertEqual(self.views[-1].text, "Colando…")
+        self.session.receive(self.session.token, "paste_text", "Texto colado no campo.")
+        self.assertFalse(self.session.active)
+
+
+
+class SoundAlikeFieldCommandTest(unittest.TestCase):
+    setUp = SelectTextSessionTest.setUp
+
+    def test_frase_que_soa_como_comando_de_campo(self):
+        # Trocas reais do Whisper com as vozes do macOS.
+        from screen_access.commands import field_command
+
+        for phrase, action in (("Polar texto.", "paste_text"), ("Calar aqui.", "paste_text"),
+                               ("Deletor.", "clear_text"), ("Impar campo.", "clear_text")):
+            self.assertEqual(field_command(phrase), action, phrase)
+        for phrase in ("Blood.", "Comandos.", "Ode.", "previsão do tempo", "clicar", "Conte-se."):
+            self.assertIsNone(field_command(phrase), phrase)
+
+    def test_vira_o_comando_mas_ainda_pede_confirmacao(self):
+        self.assertTrue(self.session.handle("Polar texto."))
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("prepare_paste", self.snapshot.window))
+        self.session.receive(self.session.token, "prepare_paste", (self.snapshot, "bom dia"))
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+
+    def test_so_como_ultimo_recurso(self):
+        self.assertFalse(self.session.handle("Blood."))
+        self.session.handle("clique em polar")  # o clique por nome continua sendo clique
+        self.assertEqual(self.executor.submit.call_args.args[1], "scan")
+        self.session.cancel()
+        self.session.begin_capture()
+        self.session.handle("digitar polar texto")  # e o ditado continua literal
+        self.assertEqual(self.session.dictation_text, "polar texto")
 
 if __name__ == "__main__":
     unittest.main()

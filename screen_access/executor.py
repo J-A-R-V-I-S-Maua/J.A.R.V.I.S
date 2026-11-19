@@ -71,6 +71,12 @@ class ScreenExecutor:
                         elif kind in ("activate", "open_item", "context_menu", "press_enter", "clear_text"):
                             getattr(backend, kind)(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                             result = None
+                        elif kind == "prepare_paste":
+                            result = backend.prepare_paste(*args)
+                        elif kind in ("copy_text", "cut_text", "paste_text"):
+                            result = getattr(backend, kind)(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
+                        elif kind == "select_text":
+                            result = backend.select_text(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "mission_control":
                             result = backend.mission_control(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "prepare_dictation":

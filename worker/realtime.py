@@ -17,7 +17,13 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 from streaming_engine import StreamingSession
 
 MODEL_NAME = "small"
-INITIAL_PROMPT = os.getenv("WHISPER_INITIAL_PROMPT", "").strip() or None
+# Vocabulário dos comandos: sem ele, palavras soltas como "deletar" saem "Delistar" ou "Militário".
+# Medido com as vozes do macOS: "deletar" foi de 1 para 4 acertos em 4 e as formas do colar de 13
+# para 20 em 20, sem mudar o ditado. O cabeçalho fica: sem ele, um "ok" virou "Colar aqui."
+# WHISPER_INITIAL_PROMPT troca este texto por outro.
+DEFAULT_PROMPT = ("Comandos do Jarvis: deletar, apagar tudo, limpar campo, copiar, colar, colar texto, "
+                  "cole aqui, recortar, selecionar tudo, mostrar números, mostrar janelas, confirmar, cancelar.")
+INITIAL_PROMPT = os.getenv("WHISPER_INITIAL_PROMPT", "").strip() or DEFAULT_PROMPT
 
 
 def transcription_options():

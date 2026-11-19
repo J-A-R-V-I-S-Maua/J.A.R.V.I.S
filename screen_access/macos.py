@@ -1,7 +1,8 @@
 """Acesso à árvore de acessibilidade no macOS (AX API, via pyobjc)."""
 import time
 
-from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSWorkspace
+from AppKit import (NSApplicationActivateIgnoringOtherApps, NSPasteboard, NSPasteboardTypeString, NSRunningApplication,
+                    NSWorkspace)
 from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
@@ -11,6 +12,7 @@ from ApplicationServices import (
     AXUIElementIsAttributeSettable,
     AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
+    AXValueCreate,
     AXValueGetValue,
     kAXChildrenAttribute,
     kAXDescriptionAttribute,
@@ -23,17 +25,28 @@ from ApplicationServices import (
     kAXSizeAttribute,
     kAXTitleAttribute,
     kAXValueAttribute,
+    kAXValueCFRangeType,
     kAXValueCGPointType,
     kAXValueCGSizeType,
 )
 from CoreFoundation import CFEqual
 from Quartz import (
     CGEventCreateKeyboardEvent,
+    CGEventCreateScrollWheelEvent2,
     CGEventKeyboardSetUnicodeString,
     CGEventPost,
     CGEventSetFlags,
+    CGEventSetIntegerValueField,
+    CGEventSetLocation,
+    CGPoint,
+    CGWindowListCopyWindowInfo,
     kCGEventFlagMaskCommand,
     kCGHIDEventTap,
+    kCGNullWindowID,
+    kCGScrollWheelEventIsContinuous,
+    kCGScrollEventUnitPixel,
+    kCGWindowListExcludeDesktopElements,
+    kCGWindowListOptionOnScreenOnly,
 )
 
 
@@ -46,9 +59,14 @@ def read_attribute(element, name):
 
 
 def frontmost_application():
-    """Devolve (pid, nome) do aplicativo que está em primeiro plano agora."""
-    app = NSWorkspace.sharedWorkspace().frontmostApplication()
-    return app.processIdentifier(), app.localizedName()
+    """Devolve (pid, nome) do aplicativo que está em primeiro plano agora.
+
+    O pid vem da acessibilidade (keyboard_pid): o NSWorkspace só atualiza a resposta num processo
+    que trata eventos do macOS, e fica preso no app inicial em scripts e no `python -m screen_access`.
+    """
+    pid = keyboard_pid()
+    app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    return pid, app.localizedName() if app is not None else ""
 
 
 def pid_for_bundle(bundle_id):
@@ -187,6 +205,9 @@ def press_key(keycode, flags=0, text=None):
 # Códigos de tecla são posições físicas do teclado. Return e Delete não mudam com o layout;
 # a posição 0 é a letra A nos layouts QWERTY (ABNT2 e americano), mas não em um AZERTY.
 KEY_A = 0
+KEY_X = 7
+KEY_C = 8
+KEY_V = 9
 KEY_RETURN = 36
 KEY_DELETE = 51  # apagar para trás (Backspace)
 COMMAND = kCGEventFlagMaskCommand
@@ -205,6 +226,59 @@ def type_text(text, allowed=lambda: True):
         press_key(0, text=char)
         time.sleep(KEY_PAUSE)
     return True
+
+
+def clipboard_count():
+    """Contador da área de transferência: muda a cada cópia, de qualquer aplicativo."""
+    return NSPasteboard.generalPasteboard().changeCount()
+
+
+def clipboard_text():
+    text = NSPasteboard.generalPasteboard().stringForType_(NSPasteboardTypeString)
+    return str(text) if text is not None else ""
+
+
+def wait_clipboard_change(before, timeout=1.0):
+    """Espera o aplicativo processar o Cmd+C (ou Cmd+X). Devolve False se a cópia não aconteceu."""
+    deadline = time.monotonic() + timeout
+    while clipboard_count() == before:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def scroll_wheel(point, pixels):
+    """Rolagem como a de dois dedos no trackpad, no ponto dado (coordenadas da AX), sem mover o cursor.
+
+    Negativo desce a página. Verificado num Mac real no Chrome, que não expõe barra de rolagem.
+    """
+    event = CGEventCreateScrollWheelEvent2(None, kCGScrollEventUnitPixel, 1, int(pixels), 0, 0)
+    # Contínuo, como o do trackpad: sem isto o Chrome anima cada evento por conta própria e,
+    # com um evento por quadro, a página anda aos trancos.
+    CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1)
+    CGEventSetLocation(event, CGPoint(*point))
+    CGEventPost(kCGHIDEventTap, event)
+
+
+def window_owner_at(point, ignore=()):
+    """Pid do dono da janela de aplicativo mais à frente no ponto, pulando os pids de `ignore`.
+
+    É ela que recebe uma rolagem feita ali. Só conta a camada 0, a das janelas de aplicativo:
+    painéis acima dela (o do Canopy, no notch, ocupa o topo da tela inteira) em geral deixam a
+    rolagem passar, e a lista de janelas não diz quais deixam. Não precisa de gravação de tela.
+    """
+    windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+                                         kCGNullWindowID) or ()
+    for info in windows:  # da frente para trás
+        pid = info.get("kCGWindowOwnerPID")
+        bounds = info.get("kCGWindowBounds") or {}
+        if pid in ignore or info.get("kCGWindowLayer", 0) != 0 or not info.get("kCGWindowAlpha", 1):
+            continue
+        x, y = bounds.get("X", 0), bounds.get("Y", 0)
+        if x <= point[0] < x + bounds.get("Width", 0) and y <= point[1] < y + bounds.get("Height", 0):
+            return pid
+    return None
 
 
 AX_ERRORS = {
@@ -256,6 +330,20 @@ def element_frame(element):
     if not (position_ok and size_ok):
         return None
     return (point.x, point.y, dimensions.width, dimensions.height)
+
+
+def selected_range(element):
+    """(início, tamanho) da seleção do campo, em unidades UTF-16; o cursor é uma seleção vazia."""
+    value = read_attribute(element, "AXSelectedTextRange")
+    if value is None:
+        return None
+    ok, selection = AXValueGetValue(value, kAXValueCFRangeType, None)
+    return tuple(selection) if ok else None
+
+
+def select_range(element, location, length):
+    """Seleciona o intervalo (em unidades UTF-16) do campo. Devolve o código de erro; 0 = aceito."""
+    return set_attribute(element, "AXSelectedTextRange", AXValueCreate(kAXValueCFRangeType, (location, length)))
 
 
 def intersect(a, b):

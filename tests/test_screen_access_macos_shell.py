@@ -385,3 +385,233 @@ class MissionControlToggleTest(unittest.TestCase):
         env = Environment(self, dock_running=False)
         with self.assertRaisesRegex(env.module.ScreenError, "Dock"):
             env.backend.mission_control(True)
+
+
+class ScrollTest(unittest.TestCase):
+    """Janela de pasta do Finder com uma lista três vezes mais alta que a área visível."""
+
+    def setUp(self):
+        self.env = env = Environment(self, front="window")
+        env.roles["bar"], env.roles["list"] = "AXScrollBar", "AXOutline"
+        env.frames["list"] = (100, 130, 600, 1110)
+        env.children["windowarea"] = ("list",)
+        env.attrs[("windowarea", "AXContents")] = ("list",)
+        self.settable = set()
+        self.wheel = []
+        self.owner = FINDER
+
+        def walk_with_clip(element, max_depth, clip, depth=0):
+            yield depth, element, clip
+            for child in env.children.get(element, ()):
+                yield from walk_with_clip(child, max_depth, clip, depth + 1)
+
+        def set_attribute(element, name, value):
+            env.attrs[(element, name)] = value
+            return 0
+
+        macos = env.macos
+        macos.walk_with_clip = walk_with_clip
+        macos.is_settable = lambda element, name: (element, name) in self.settable
+        macos.set_attribute = set_attribute
+        macos.focused_element = lambda pid: None
+        macos.parent = lambda element: next((key for key, kids in env.children.items() if element in kids), None)
+        macos.same_element = lambda a, b: a is not None and a == b
+        macos.scroll_wheel = lambda point, pixels: self.wheel.append((point, pixels))
+        macos.window_owner_at = lambda point, ignore=(): self.owner
+        self.window = env.backend.foreground()
+
+    def with_bar(self):
+        self.env.attrs[("windowarea", "AXVerticalScrollBar")] = "bar"
+        self.env.attrs[("bar", "AXValue")] = 0.0
+        self.settable.add(("bar", "AXValue"))
+
+    def test_app_nativo_rola_pela_barra_e_confirma_o_movimento(self):
+        from screen_access.scroll import ScrollOutcome, ScrollRequest
+
+        self.with_bar()
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.assertEqual([(item.role, item.action) for item in targets.snapshot.elements], [("AXScrollArea", "scroll")])
+        self.assertEqual(targets.preferred, 1)
+        outcome = self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("down", "small"))
+        self.assertEqual(outcome, ScrollOutcome.MOVED)
+        # Visível: um terço da lista. "Um pouco" anda 15% da altura visível.
+        self.assertAlmostEqual(self.env.attrs[("bar", "AXValue")], 0.075)
+        self.assertEqual(self.wheel, [])
+
+    def test_area_sem_barra_recebe_rolagem_do_trackpad_no_centro(self):
+        from screen_access.scroll import ScrollOutcome, ScrollRequest
+
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.assertEqual(self.env.backend.scroll_references[1][5], "wheel")
+        with patch.object(self.env.module.time, "sleep"):
+            outcome = self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("down", "normal"))
+        self.assertEqual(outcome, ScrollOutcome.REQUESTED)  # a página não diz onde está
+        self.assertEqual({point for point, _ in self.wheel}, {(400.0, 315.0)})
+        self.assertEqual(sum(pixels for _, pixels in self.wheel), -185)  # metade da altura, para baixo
+        self.assertGreater(len(self.wheel), 5)  # em vários passos, não num salto só
+
+    def test_sem_area_exposta_rola_a_janela_inteira(self):
+        from screen_access.scroll import ScrollRequest
+
+        self.env.children["window"] = ()  # como o Cursor e outros apps Electron
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.assertEqual([item.role for item in targets.snapshot.elements], ["AXWindow"])
+        with patch.object(self.env.module.time, "sleep"):
+            self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("up", "page"))
+        self.assertEqual({point for point, _ in self.wheel}, {(400.0, 300.0)})
+        self.assertEqual(sum(pixels for _, pixels in self.wheel), 360)  # 90% da janela, para cima
+
+    def test_outra_janela_por_cima_cancela_sem_rolar(self):
+        from screen_access.scroll import ScrollRequest
+
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.owner = OTHER
+        with self.assertRaisesRegex(self.env.module.ScreenError, "por cima"):
+            self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("down", "normal"))
+        self.assertEqual(self.wheel, [])
+
+    def test_mesa_e_mission_control_nao_viram_area_rolavel(self):
+        env = Environment(self, front="desk")
+        env.macos.window_owner_at = lambda point, ignore=(): FINDER
+        env.macos.focused_element = lambda pid: None
+        targets = env.backend.prepare_scroll(env.backend.foreground())
+        self.assertEqual(targets.snapshot.elements, ())
+
+
+class TextFieldFixture:
+    """Campo de texto dentro da janela de pasta, com a seleção guardada em unidades UTF-16."""
+
+    def setUp(self):
+        self.env = env = Environment(self, front="window")
+        env.roles["field"] = "AXTextField"
+        env.names["field"] = "Mensagem"
+        env.frames["field"] = (120, 140, 300, 24)
+        env.children["window"] = ("windowarea", "field")
+        env.attrs.update({("field", "AXEnabled"): True, ("field", "AXWindow"): "window"})
+        self.selection = None
+        self.accepts = True
+        macos = env.macos
+        macos.focused_element = lambda pid: "field"
+        macos.keyboard_pid = lambda: FINDER
+        macos.activate_application = Mock(return_value=True)
+        macos.same_element = lambda a, b: a is not None and a == b
+        macos.parent = lambda element: next((key for key, kids in env.children.items() if element in kids), None)
+        macos.set_attribute = Mock(return_value=0)
+        macos.selected_range = lambda element: self.selection
+        macos.select_range = Mock(side_effect=self.select)
+        macos.press_key = Mock()
+        macos.KEY_A, macos.COMMAND = 0, 1 << 20
+        self.window = env.backend.foreground()
+
+    def select(self, element, location, length):
+        if not self.accepts:
+            return -25205
+        self.selection = (location, length)
+        return 0
+
+    def run_selection(self, text, selection, cursor=None):
+        self.env.attrs[("field", "AXValue")] = text
+        self.selection = (len(text.encode("utf-16-le")) // 2 if cursor is None else cursor, 0)
+        snapshot = self.env.backend.prepare_dictation(self.window)
+        return self.env.backend.select_text(snapshot, selection)
+
+    def selected(self, text):
+        start, length = self.selection
+        units = text.encode("utf-16-le")
+        return units[start * 2:(start + length) * 2].decode("utf-16-le")
+
+
+class SelectTextTest(TextFieldFixture, unittest.TestCase):
+    def test_trecho_falado_seleciona_o_mais_perto_antes_do_cursor(self):
+        text = "Olá Maria, olá de novo"
+        message = self.run_selection(text, ("text", "o la"))  # como o Whisper costuma entregar "olá"
+        self.assertEqual(self.selection, (11, 3))
+        self.assertEqual(message, "Selecionado: “olá”. Aparece 2 vezes; escolhi a mais perto antes do cursor.")
+
+    def test_tudo_e_ultima_palavra(self):
+        text = "Bom dia, Jarvis!"
+        self.assertEqual(self.run_selection(text, ("all", None)), "Todo o texto do campo foi selecionado.")
+        self.assertEqual(self.selected(text), text)
+        self.run_selection(text, ("last_word", None))
+        self.assertEqual(self.selected(text), "Jarvis")
+
+    def test_emoji_conta_duas_posicoes_para_o_macos(self):
+        text = "😀 olá"
+        self.run_selection(text, ("text", "ola"))
+        self.assertEqual(self.selection, (3, 3))
+        self.assertEqual(self.selected(text), "olá")
+
+    def test_trecho_ausente_ou_campo_vazio_nao_mexe_na_selecao(self):
+        with self.assertRaisesRegex(self.env.module.ScreenError, "Não encontrei “xyz”"):
+            self.run_selection("Bom dia", ("text", "xyz"))
+        with self.assertRaisesRegex(self.env.module.ScreenError, "vazio"):
+            self.run_selection("   ", ("all", None))
+        self.env.macos.select_range.assert_not_called()
+
+    def test_campo_que_recusa_a_selecao(self):
+        self.accepts = False
+        with self.assertRaisesRegex(self.env.module.ScreenError, "não deixa selecionar"):
+            self.run_selection("Bom dia", ("text", "dia"))
+        self.env.macos.press_key.assert_not_called()
+        # "Tudo" tem o atalho do sistema como reserva, no campo já validado.
+        self.run_selection("Bom dia", ("all", None))
+        self.env.macos.press_key.assert_called_once_with(0, 1 << 20)
+
+
+class ClipboardTest(TextFieldFixture, unittest.TestCase):
+    """Mesmo campo; a área de transferência é um contador e um texto, como o NSPasteboard."""
+
+    def setUp(self):
+        super().setUp()
+        self.clipboard = {"count": 1, "text": "anterior"}
+        self.env.attrs[("field", "AXValue")] = "Bom dia, Jarvis!"
+        self.env.attrs[("field", "AXSelectedText")] = "Jarvis"
+        macos = self.env.macos
+        macos.KEY_C, macos.KEY_X, macos.KEY_V = 8, 7, 9
+        macos.clipboard_count = lambda: self.clipboard["count"]
+        macos.clipboard_text = lambda: self.clipboard["text"]
+        macos.wait_clipboard_change = lambda before, timeout=1.0: self.clipboard["count"] != before
+        macos.press_key = Mock(side_effect=self.key)
+
+    def key(self, keycode, flags=0, text=None):
+        if keycode in (7, 8) and self.env.attrs[("field", "AXSelectedText")]:
+            self.clipboard.update(count=self.clipboard["count"] + 1, text=self.env.attrs[("field", "AXSelectedText")])
+
+    def snapshot(self):
+        return self.env.backend.prepare_dictation(self.window)
+
+    def test_copiar_confere_a_area_de_transferencia(self):
+        self.assertEqual(self.env.backend.copy_text(self.snapshot()), "Copiado: “Jarvis”.")
+        self.env.macos.press_key.assert_called_once_with(8, 1 << 20)
+
+    def test_sem_selecao_avisa_em_vez_de_copiar(self):
+        self.env.attrs[("field", "AXSelectedText")] = ""
+        for action in (self.env.backend.copy_text, self.env.backend.cut_text):
+            with self.assertRaisesRegex(self.env.module.ScreenError, "Nada selecionado"):
+                action(self.snapshot())
+        self.env.macos.press_key.assert_not_called()
+
+    def test_aplicativo_que_ignora_o_atalho(self):
+        self.env.macos.press_key = Mock()  # a tecla vai, mas nada é copiado
+        with self.assertRaisesRegex(self.env.module.ScreenError, "não copiou"):
+            self.env.backend.copy_text(self.snapshot())
+
+    def test_recortar(self):
+        self.assertIn("Recortado: “Jarvis”", self.env.backend.cut_text(self.snapshot()))
+        self.env.macos.press_key.assert_called_once_with(7, 1 << 20)
+
+    def test_colar_mostra_o_conteudo_e_so_cola_o_que_foi_mostrado(self):
+        snapshot, preview = self.env.backend.prepare_paste(self.window)
+        self.assertEqual(preview, "anterior")
+        self.assertEqual(self.env.backend.paste_text(snapshot), "Texto colado no campo.")
+        self.env.macos.press_key.assert_called_once_with(9, 1 << 20)
+        snapshot, _ = self.env.backend.prepare_paste(self.window)
+        self.clipboard["text"] = "outra coisa"  # copiado por outro app entre a pergunta e o "confirmar"
+        with self.assertRaisesRegex(self.env.module.ScreenError, "mudou"):
+            self.env.backend.paste_text(snapshot)
+        self.assertEqual(self.env.macos.press_key.call_count, 1)
+
+    def test_area_de_transferencia_vazia(self):
+        self.clipboard["text"] = "   "
+        with self.assertRaisesRegex(self.env.module.ScreenError, "não tem texto"):
+            self.env.backend.prepare_paste(self.window)

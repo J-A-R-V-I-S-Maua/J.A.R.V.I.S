@@ -69,6 +69,11 @@ def _similarity(word, other):
     return 0.0
 
 
+def word_similarity(word, other):
+    """Nota de 0 a 1 para duas palavras soarem iguais ("polar" e "colar" passam; "blood", não)."""
+    return _similarity(sound_key(word), sound_key(other))
+
+
 def _looks_like_command(token):
     if token in STOPWORDS:
         return True
@@ -134,3 +139,50 @@ def choose(phrase, names, numbers=True):
     if len(close) == 1:
         return Choice("match", close[0])
     return Choice("ambiguous", candidates=tuple(close[:MAX_CANDIDATES]))
+
+
+WORD = re.compile(r"\w+")
+
+
+def _same_word(word, other, fuzzy):
+    if word == other:
+        return True
+    return fuzzy and (sound_key(word) == sound_key(other) or _similarity(sound_key(word), sound_key(other)) > 0)
+
+
+def find_in_text(text, phrase, cursor=None):
+    """Onde está, dentro do texto de um campo, o trecho falado: (início, fim, ocorrências) ou None.
+
+    Compara palavra por palavra, sem acentos nem maiúsculas; se nada bater, aceita a mesma
+    tolerância sonora da escolha por nome. A transcrição também separa palavras ("o lá" por
+    "olá"), então tenta o trecho junto. Com várias ocorrências, fica a mais perto antes do
+    cursor: em geral, o que a pessoa acabou de ditar.
+    """
+    words = [(match.start(), match.end(), "".join(tokenize(match.group()))) for match in WORD.finditer(text)]
+    wanted = tokenize(phrase)
+    if not words or not wanted:
+        return None
+    targets = [wanted] + ([["".join(wanted)]] if len(wanted) > 1 else [])
+    found = []
+    for fuzzy in (False, True):
+        for target in targets:
+            for index in range(len(words) - len(target) + 1):
+                window = words[index:index + len(target)]
+                if all(_same_word(word[2], wanted_word, fuzzy) for word, wanted_word in zip(window, target)):
+                    found.append((window[0][0], window[-1][1]))
+            if found:
+                break
+        if found:
+            break
+    if not found:
+        return None
+    before = [span for span in found if cursor is not None and span[0] < cursor]
+    start, end = before[-1] if before else found[0]
+    return start, end, len(found)
+
+
+def last_word(text, cursor=None):
+    """(início, fim) da última palavra antes do cursor (ou do texto todo, sem cursor), ou None."""
+    limit = len(text) if cursor is None else cursor
+    spans = [(match.start(), match.end()) for match in WORD.finditer(text) if match.start() < limit]
+    return spans[-1] if spans else None
