@@ -212,6 +212,14 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   antes do cursor, em geral o que acabou de ser ditado. Também há **“selecionar tudo”** e
   **“selecionar a última palavra”**. Selecionar não altera o texto, então não pede confirmação.
   “Selecionar [nome]” sozinho continua sendo o clique no controle com esse nome.
+- **“Copiar texto”**, **“recortar texto”** e **“colar texto”** (macOS): funcionam no campo
+  ativo, como Cmd+C, Cmd+X e Cmd+V. “Copiar”, “recortar” e “colar” sozinhos também valem,
+  mas com “texto” o reconhecimento erra menos. Copiar é direto e confere na área de
+  transferência se a cópia aconteceu de fato. Recortar e colar pedem **“confirmar”**; o colar
+  mostra antes o que vai ser colado (“Colar ‘bom dia’ em Mensagem?”) e não cola se a área de
+  transferência mudar depois da pergunta. Sem nada selecionado, copiar e recortar avisam em
+  vez de seguir. Exemplo: “selecionar a palavra olá”, “copiar texto”; depois, em outro campo,
+  “colar texto” e “confirmar”.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens

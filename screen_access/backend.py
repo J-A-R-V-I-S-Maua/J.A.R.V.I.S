@@ -150,6 +150,18 @@ class Backend:
     def clear_text(self, snapshot, number=1, cancelled=lambda: False):
         raise ScreenError("Limpeza do campo ativo indisponível neste sistema.")
 
+    def prepare_paste(self, window):
+        raise ScreenError("Copiar e colar pela voz está disponível somente no macOS nesta versão.")
+
+    def copy_text(self, snapshot, number=1, cancelled=lambda: False):
+        raise ScreenError("Copiar e colar pela voz está disponível somente no macOS nesta versão.")
+
+    def cut_text(self, snapshot, number=1, cancelled=lambda: False):
+        raise ScreenError("Copiar e colar pela voz está disponível somente no macOS nesta versão.")
+
+    def paste_text(self, snapshot, number=1, cancelled=lambda: False):
+        raise ScreenError("Copiar e colar pela voz está disponível somente no macOS nesta versão.")
+
     def select_text(self, snapshot, selection, cancelled=lambda: False):
         raise ScreenError("Selecionar texto pela voz está disponível somente no macOS nesta versão.")
 

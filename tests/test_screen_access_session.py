@@ -359,5 +359,51 @@ class SelectTextSessionTest(unittest.TestCase):
         self.assertEqual(self.views[-1].text, "Não encontrei “xyz” no campo.")
 
 
+
+class ClipboardSessionTest(unittest.TestCase):
+    setUp = SelectTextSessionTest.setUp
+
+    def found_field(self, phrase, prepare="prepare_dictation"):
+        self.assertTrue(self.session.handle(phrase))
+        self.assertEqual(self.executor.submit.call_args.args[1:], (prepare, self.snapshot.window))
+
+    def test_frases_com_texto_e_palavras_soltas(self):
+        for phrase, action in (("Copiar texto.", "copy_text"), ("copiar", "copy_text"), ("Recortar texto", "cut_text"),
+                               ("Colar texto.", "paste_text"), ("cole aqui", "paste_text")):
+            with self.subTest(phrase=phrase):
+                self.session.cancel()
+                self.session.begin_capture()
+                self.session.handle(phrase)
+                self.assertEqual(self.session.pending_action, action)
+
+    def test_copiar_vai_direto(self):
+        self.found_field("copiar texto")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("copy_text", self.snapshot, 1))
+        self.session.receive(self.session.token, "copy_text", "Copiado: “olá”.")
+        self.assertEqual(self.views[-1].text, "Copiado: “olá”.")
+        self.assertFalse(self.session.active)
+
+    def test_recortar_pede_confirmacao(self):
+        self.found_field("recortar texto")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+        self.assertIn("Recortar o texto selecionado", self.views[-1].text)
+        count = self.executor.submit.call_count
+        self.session.handle("cancelar")
+        self.assertEqual(self.executor.submit.call_count, count)
+
+    def test_colar_mostra_o_que_vai_colar_e_espera_confirmar(self):
+        self.found_field("colar texto", prepare="prepare_paste")
+        self.session.receive(self.session.token, "prepare_paste", (self.snapshot, "bom dia"))
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+        self.assertTrue(self.views[-1].text.startswith("Colar “bom dia” em"))
+        self.session.handle("confirmar")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("paste_text", self.snapshot, 1))
+        self.assertEqual(self.views[-1].text, "Colando…")
+        self.session.receive(self.session.token, "paste_text", "Texto colado no campo.")
+        self.assertFalse(self.session.active)
+
+
 if __name__ == "__main__":
     unittest.main()

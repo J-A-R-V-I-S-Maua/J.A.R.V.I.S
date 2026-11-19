@@ -15,7 +15,7 @@ SETTINGS_COMMANDS = {normalize(text) for text in (
 )}
 HELP_COMMANDS = {"ajuda", "o que posso dizer", "quais comandos"}
 HELP = {
-    "general": "Diga mostrar números, mostrar janelas, clique em [nome], digitar [texto], selecionar a palavra [texto], role para baixo, role para cima, Enter, limpar campo, executar atalho ou abrir configurações.",
+    "general": "Diga mostrar números, mostrar janelas, clique em [nome], digitar [texto], selecionar a palavra [texto], copiar texto, colar texto, role para baixo, role para cima, Enter, limpar campo, executar atalho ou abrir configurações.",
     "choosing": "Diga um dos números exibidos, confirmar após escolher, ou cancelar.",
     "confirming": "Diga confirmar ou sim para executar; cancelar ou não para abandonar.",
     "shortcut": "Diga a frase cadastrada nas configurações ou cancelar.",

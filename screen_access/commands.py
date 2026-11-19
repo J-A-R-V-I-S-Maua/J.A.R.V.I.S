@@ -35,6 +35,13 @@ FIELD_COMMANDS = {
     "deleta": "clear_text", "deletar tudo": "clear_text", "apaga tudo": "clear_text",
     "limpa o campo": "clear_text", "limpar o campo": "clear_text", "limpa campo": "clear_text",
     "apagar o campo": "clear_text", "apaga o campo": "clear_text",
+    # Com "texto" o reconhecimento acerta mais: "colar" sozinho às vezes sai "Polar" ou "Blood".
+    "copiar texto": "copy_text", "copiar": "copy_text", "copie": "copy_text", "copia": "copy_text",
+    "copiar o texto": "copy_text", "copiar selecao": "copy_text", "copiar a selecao": "copy_text",
+    "recortar texto": "cut_text", "recortar": "cut_text", "recorte": "cut_text", "recorta": "cut_text",
+    "recortar o texto": "cut_text", "recortar selecao": "cut_text", "recortar a selecao": "cut_text",
+    "colar texto": "paste_text", "colar": "paste_text", "cole": "paste_text", "cola": "paste_text",
+    "colar o texto": "paste_text", "colar aqui": "paste_text", "cole aqui": "paste_text",
 }
 
 

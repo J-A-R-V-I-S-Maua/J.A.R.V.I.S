@@ -1,7 +1,8 @@
 """Acesso à árvore de acessibilidade no macOS (AX API, via pyobjc)."""
 import time
 
-from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSWorkspace
+from AppKit import (NSApplicationActivateIgnoringOtherApps, NSPasteboard, NSPasteboardTypeString, NSRunningApplication,
+                    NSWorkspace)
 from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
@@ -204,6 +205,9 @@ def press_key(keycode, flags=0, text=None):
 # Códigos de tecla são posições físicas do teclado. Return e Delete não mudam com o layout;
 # a posição 0 é a letra A nos layouts QWERTY (ABNT2 e americano), mas não em um AZERTY.
 KEY_A = 0
+KEY_X = 7
+KEY_C = 8
+KEY_V = 9
 KEY_RETURN = 36
 KEY_DELETE = 51  # apagar para trás (Backspace)
 COMMAND = kCGEventFlagMaskCommand
@@ -221,6 +225,26 @@ def type_text(text, allowed=lambda: True):
             return False
         press_key(0, text=char)
         time.sleep(KEY_PAUSE)
+    return True
+
+
+def clipboard_count():
+    """Contador da área de transferência: muda a cada cópia, de qualquer aplicativo."""
+    return NSPasteboard.generalPasteboard().changeCount()
+
+
+def clipboard_text():
+    text = NSPasteboard.generalPasteboard().stringForType_(NSPasteboardTypeString)
+    return str(text) if text is not None else ""
+
+
+def wait_clipboard_change(before, timeout=1.0):
+    """Espera o aplicativo processar o Cmd+C (ou Cmd+X). Devolve False se a cópia não aconteceu."""
+    deadline = time.monotonic() + timeout
+    while clipboard_count() == before:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
     return True
 
 

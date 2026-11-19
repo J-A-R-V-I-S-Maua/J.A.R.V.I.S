@@ -478,7 +478,7 @@ class ScrollTest(unittest.TestCase):
         self.assertEqual(targets.snapshot.elements, ())
 
 
-class SelectTextTest(unittest.TestCase):
+class TextFieldFixture:
     """Campo de texto dentro da janela de pasta, com a seleção guardada em unidades UTF-16."""
 
     def setUp(self):
@@ -520,6 +520,8 @@ class SelectTextTest(unittest.TestCase):
         units = text.encode("utf-16-le")
         return units[start * 2:(start + length) * 2].decode("utf-16-le")
 
+
+class SelectTextTest(TextFieldFixture, unittest.TestCase):
     def test_trecho_falado_seleciona_o_mais_perto_antes_do_cursor(self):
         text = "Olá Maria, olá de novo"
         message = self.run_selection(text, ("text", "o la"))  # como o Whisper costuma entregar "olá"
@@ -554,3 +556,62 @@ class SelectTextTest(unittest.TestCase):
         # "Tudo" tem o atalho do sistema como reserva, no campo já validado.
         self.run_selection("Bom dia", ("all", None))
         self.env.macos.press_key.assert_called_once_with(0, 1 << 20)
+
+
+class ClipboardTest(TextFieldFixture, unittest.TestCase):
+    """Mesmo campo; a área de transferência é um contador e um texto, como o NSPasteboard."""
+
+    def setUp(self):
+        super().setUp()
+        self.clipboard = {"count": 1, "text": "anterior"}
+        self.env.attrs[("field", "AXValue")] = "Bom dia, Jarvis!"
+        self.env.attrs[("field", "AXSelectedText")] = "Jarvis"
+        macos = self.env.macos
+        macos.KEY_C, macos.KEY_X, macos.KEY_V = 8, 7, 9
+        macos.clipboard_count = lambda: self.clipboard["count"]
+        macos.clipboard_text = lambda: self.clipboard["text"]
+        macos.wait_clipboard_change = lambda before, timeout=1.0: self.clipboard["count"] != before
+        macos.press_key = Mock(side_effect=self.key)
+
+    def key(self, keycode, flags=0, text=None):
+        if keycode in (7, 8) and self.env.attrs[("field", "AXSelectedText")]:
+            self.clipboard.update(count=self.clipboard["count"] + 1, text=self.env.attrs[("field", "AXSelectedText")])
+
+    def snapshot(self):
+        return self.env.backend.prepare_dictation(self.window)
+
+    def test_copiar_confere_a_area_de_transferencia(self):
+        self.assertEqual(self.env.backend.copy_text(self.snapshot()), "Copiado: “Jarvis”.")
+        self.env.macos.press_key.assert_called_once_with(8, 1 << 20)
+
+    def test_sem_selecao_avisa_em_vez_de_copiar(self):
+        self.env.attrs[("field", "AXSelectedText")] = ""
+        for action in (self.env.backend.copy_text, self.env.backend.cut_text):
+            with self.assertRaisesRegex(self.env.module.ScreenError, "Nada selecionado"):
+                action(self.snapshot())
+        self.env.macos.press_key.assert_not_called()
+
+    def test_aplicativo_que_ignora_o_atalho(self):
+        self.env.macos.press_key = Mock()  # a tecla vai, mas nada é copiado
+        with self.assertRaisesRegex(self.env.module.ScreenError, "não copiou"):
+            self.env.backend.copy_text(self.snapshot())
+
+    def test_recortar(self):
+        self.assertIn("Recortado: “Jarvis”", self.env.backend.cut_text(self.snapshot()))
+        self.env.macos.press_key.assert_called_once_with(7, 1 << 20)
+
+    def test_colar_mostra_o_conteudo_e_so_cola_o_que_foi_mostrado(self):
+        snapshot, preview = self.env.backend.prepare_paste(self.window)
+        self.assertEqual(preview, "anterior")
+        self.assertEqual(self.env.backend.paste_text(snapshot), "Texto colado no campo.")
+        self.env.macos.press_key.assert_called_once_with(9, 1 << 20)
+        snapshot, _ = self.env.backend.prepare_paste(self.window)
+        self.clipboard["text"] = "outra coisa"  # copiado por outro app entre a pergunta e o "confirmar"
+        with self.assertRaisesRegex(self.env.module.ScreenError, "mudou"):
+            self.env.backend.paste_text(snapshot)
+        self.assertEqual(self.env.macos.press_key.call_count, 1)
+
+    def test_area_de_transferencia_vazia(self):
+        self.clipboard["text"] = "   "
+        with self.assertRaisesRegex(self.env.module.ScreenError, "não tem texto"):
+            self.env.backend.prepare_paste(self.window)

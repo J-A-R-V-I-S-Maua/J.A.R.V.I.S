@@ -78,6 +78,8 @@ class MacOSBackend(ScrollMixin, Backend):
         self.last_field = None
         # (identidade da janela, elemento): o foco já analisado, para não refazer a conta a cada 0,2 s.
         self.last_focus = None
+        # O texto que a pergunta "Colar …?" mostrou; colar outra coisa depois do "confirmar", nunca.
+        self.paste_preview = None
 
     def __enter__(self):
         if not has_accessibility_permission():
@@ -390,6 +392,54 @@ class MacOSBackend(ScrollMixin, Backend):
                 raise ScreenError("Este campo não deixa selecionar texto pela acessibilidade.")
             macos.press_key(macos.KEY_A, macos.COMMAND)  # selecionar tudo pelo teclado, no campo validado
         return message
+
+    def _require_selection(self, element, verb):
+        # Nem todo campo informa a seleção (AXSelectedText); nesses, a área de transferência confere depois.
+        if macos.read_attribute(element, "AXSelectedText") == "":
+            raise ScreenError(f"Nada selecionado. Diga selecionar a palavra, o texto ou tudo antes de {verb}.")
+
+    def copy_text(self, snapshot, number=1, cancelled=lambda: False):
+        if number != 1:
+            raise ScreenError("Campo ativo inválido.")
+        element = self._focus_editable(snapshot, cancelled)
+        self._require_selection(element, "copiar")
+        before = macos.clipboard_count()
+        macos.press_key(macos.KEY_C, macos.COMMAND)
+        if not macos.wait_clipboard_change(before):
+            raise ScreenError("O aplicativo não copiou o texto. Confira a seleção e repita.")
+        return f"Copiado: “{short_name(macos.clipboard_text())}”."
+
+    def cut_text(self, snapshot, number=1, cancelled=lambda: False):
+        if number != 1:
+            raise ScreenError("Campo ativo inválido.")
+        element = self._focus_editable(snapshot, cancelled)
+        self._require_selection(element, "recortar")
+        before = macos.clipboard_count()
+        macos.press_key(macos.KEY_X, macos.COMMAND)
+        if not macos.wait_clipboard_change(before):
+            raise ScreenError("O aplicativo não recortou o texto. Confira a seleção e repita.")
+        return f"Recortado: “{short_name(macos.clipboard_text())}”. Diga colar texto onde quiser usá-lo."
+
+    def prepare_paste(self, window):
+        """Como prepare_dictation, mais o texto que seria colado, para a pergunta de confirmação."""
+        snapshot = self.prepare_dictation(window)
+        text = macos.clipboard_text()
+        if not text.strip():
+            raise ScreenError("A área de transferência não tem texto para colar. Copie algo antes.")
+        self.paste_preview = text
+        return snapshot, short_name(text)
+
+    def paste_text(self, snapshot, number=1, cancelled=lambda: False):
+        if number != 1:
+            raise ScreenError("Campo ativo inválido.")
+        if self.paste_preview is None or macos.clipboard_text() != self.paste_preview:
+            raise ScreenError("A área de transferência mudou depois da pergunta. Diga colar texto de novo.")
+        element = self._focus_editable(snapshot, cancelled)
+        if cancelled() or not self._still_focused(snapshot, element):
+            raise ScreenError("O foco mudou. Nada foi colado.")
+        macos.press_key(macos.KEY_V, macos.COMMAND)
+        self.paste_preview = None
+        return "Texto colado no campo."
 
     # --- Rolagem ---------------------------------------------------------------------------
 
