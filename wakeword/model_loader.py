@@ -71,7 +71,7 @@ def create_model(cancelled=lambda: False):
     return Model(
         wakeword_models=[paths["hey_jarvis"]],
         inference_framework="onnx",
-        enable_speex_noise_suppression=False,
+        enable_speex_noise_suppression=True,
         melspec_model_path=paths["melspectrogram"],
         embedding_model_path=paths["embedding_model"],
     )

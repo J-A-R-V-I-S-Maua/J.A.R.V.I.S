@@ -1,5 +1,7 @@
 """Comandos explícitos e números PT-BR, sem interpretar fala livre como ação."""
 from .matching import tokenize
+from difflib import SequenceMatcher
+from enum import Enum
 import re
 
 UNITS = ("zero", "um", "dois", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove")
@@ -25,8 +27,61 @@ def number_name(number):
 NUMBERS = {number_name(n): n for n in range(1, 201)}
 NUMBERS.update({"uma": 1, "duas": 2, "catorze": 14, "dezasseis": 16, "dezassete": 17, "dezanove": 19})
 ACTION_VERBS = {"clique", "clicar", "clica", "acione", "acionar", "ative", "ativar", "selecione", "selecionar"}
-CANCEL = {"cancelar", "cancele", "nao", "parar", "pare"}
-CONFIRM = {"confirmar", "confirme", "sim"}
+CANCEL = {
+    "cancelar", "cancele", "cancela", "cancelo", "nao", "parar", "pare", "para",
+    "esquece", "esqueca", "deixa", "voltar", "volta", "sair", "negativo",
+}
+CONFIRM = {
+    "confirmar", "confirme", "confirma", "confirmo", "sim", "isso", "certo",
+    "pode", "claro", "positivo",
+}
+FILLERS = {"por", "favor", "a", "o", "e", "ai", "entao", "ta", "ne", "tudo", "bem"}
+MAX_REPLY_TOKENS = 4
+_ALL_REPLY_WORDS = CONFIRM | CANCEL
+_FUZZY_REPLY_WORDS = {word for word in _ALL_REPLY_WORDS if len(word) >= 6}
+_NOISE = re.compile(r"[\[\(][^\]\)]*[\]\)]")
+
+
+class Reply(Enum):
+    CONFIRM = "confirm"
+    CANCEL = "cancel"
+
+
+def _canonical_reply_word(token):
+    if token in _ALL_REPLY_WORDS:
+        return token
+    if len(token) < 7:
+        return None
+    best = max(_FUZZY_REPLY_WORDS, key=lambda word: SequenceMatcher(None, token, word).ratio())
+    if SequenceMatcher(None, token, best).ratio() >= 0.85:
+        return best
+    return None
+
+
+def classify_reply(text):
+    """Classifica respostas curtas de forma conservadora."""
+    if not isinstance(text, str):
+        return None
+    plain = _NOISE.sub(" ", text.lower())
+    tokens = tokenize(plain)
+    meaningful = [token for token in tokens if token not in FILLERS]
+    if not meaningful or len(meaningful) > MAX_REPLY_TOKENS:
+        return None
+
+    confirm = cancel = unknown = 0
+    for token in meaningful:
+        word = _canonical_reply_word(token)
+        if word in CANCEL:
+            cancel += 1
+        elif word in CONFIRM:
+            confirm += 1
+        else:
+            unknown += 1
+    if cancel:
+        return Reply.CANCEL
+    if confirm and not unknown:
+        return Reply.CONFIRM
+    return None
 FIELD_COMMANDS = {
     "enter": "press_enter", "pressionar enter": "press_enter", "pressione enter": "press_enter",
     "apertar enter": "press_enter", "deletar": "clear_text", "delete": "clear_text",

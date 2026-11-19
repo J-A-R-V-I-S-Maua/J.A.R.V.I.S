@@ -28,6 +28,12 @@ def _run_transcription(path: str, language: str):
         condition_on_previous_text=False,
         temperature=0.0,
         beam_size=5,
+        without_timestamps=True,
+        max_new_tokens=12,
+        no_speech_threshold=0.6,
+        vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 200},
+        hotwords="sim, não, confirmar, cancelar",
+        initial_prompt="Comandos em português: confirmar, cancelar, sim, não, mostrar números, digitar.",
     )
 
     return[
@@ -37,6 +43,7 @@ def _run_transcription(path: str, language: str):
             "text": s.text,
         }
         for s in segments
+        if s.no_speech_prob <= 0.6 and s.avg_logprob >= -1.0
     ]
 
 model = WhisperModel(
