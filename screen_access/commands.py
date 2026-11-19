@@ -31,6 +31,10 @@ FIELD_COMMANDS = {
     "enter": "press_enter", "pressionar enter": "press_enter", "pressione enter": "press_enter",
     "apertar enter": "press_enter", "deletar": "clear_text", "delete": "clear_text",
     "apagar tudo": "clear_text", "limpar campo": "clear_text",
+    # Formas naturais da mesma ordem; "apagar tudo" é a que o reconhecimento erra menos.
+    "deleta": "clear_text", "deletar tudo": "clear_text", "apaga tudo": "clear_text",
+    "limpa o campo": "clear_text", "limpar o campo": "clear_text", "limpa campo": "clear_text",
+    "apagar o campo": "clear_text", "apaga o campo": "clear_text",
 }
 
 

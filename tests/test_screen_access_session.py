@@ -212,6 +212,16 @@ class SessionTest(unittest.TestCase):
             self.session.receive(self.session.token, action, None)
             self.assertFalse(self.session.active)
 
+    def test_delete_accepts_the_natural_ways_of_saying_it(self):
+        # Formas que o Whisper entrega com o prompt de comandos, com pontuação e maiúsculas.
+        for phrase in ("Apaga tudo!", "Apagar tudo.", "Limpa o campo.", "Limpar campo", "Deleta", "Deletar tudo"):
+            with self.subTest(phrase=phrase):
+                self.session.cancel()
+                self.session.begin_capture()
+                self.assertTrue(self.session.handle(phrase))
+                self.assertEqual(self.executor.submit.call_args.args[1:], ("prepare_dictation", self.snapshot.window))
+                self.assertEqual(self.session.pending_action, "clear_text")
+
     def test_delete_cancel_invalid_confirmation_and_late_reply(self):
         for response in ("cancelar", "talvez"):
             self.session.begin_capture()

@@ -202,9 +202,10 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
 - **“Enter”** (Windows): pede confirmação e envia Enter ao campo de texto ativo.
   Em campos de pesquisa, executa o comportamento de pesquisa do aplicativo; em
   editores de várias linhas, pode inserir uma nova linha. Também aceita **“pressionar enter”**.
-- **“Deletar”** (Windows): pede confirmação e apaga **todo o conteúdo do campo ativo**,
-  incluindo texto que já existia antes da última ditagem. Também aceita **“limpar campo”**
-  e **“apagar tudo”**. Sem campo editável ativo, solicita que você selecione um.
+- **“Deletar”** (Windows e macOS): pede confirmação e apaga **todo o conteúdo do campo ativo**,
+  incluindo texto que já existia antes da última ditagem. Também aceita **“apagar tudo”**,
+  **“limpar campo”**, “apaga tudo”, “limpa o campo” e “deleta”. Sem campo editável ativo,
+  solicita que você selecione um. “Apagar tudo” é a forma que o reconhecimento erra menos.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens
@@ -396,7 +397,7 @@ não são alterados. Os destinos locais e o catálogo do sistema são priorizado
 | `STREAM_MAX_SECONDS` | `30` | Duração máxima da interação, incluindo espera inicial. |
 | `STREAM_PRE_ROLL_SECONDS` | `0.8` | Áudio preservado antes da confirmação de voz; aceita valores positivos até 2 segundos. |
 | `MICROPHONE_DEVICE_INDEX` | dispositivo padrão | Índice da entrada de áudio do host; consulte `--list-microphones`. |
-| `WHISPER_INITIAL_PROMPT` | vazio | Contexto opcional do Whisper no container `realtime`; exige recriar o serviço. |
+| `WHISPER_INITIAL_PROMPT` | vocabulário dos comandos | Contexto do Whisper no container `realtime`. O padrão lista os comandos (“deletar”, “limpar campo”, “copiar”…), que sem ele saem trocados; um valor próprio substitui o padrão. Exige recriar o serviço. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
 

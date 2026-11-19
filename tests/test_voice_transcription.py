@@ -176,5 +176,45 @@ class MicrophoneSelectionTest(unittest.TestCase):
                 select_input_device(self.audio)
 
 
+
+
+class WhisperPromptTest(unittest.TestCase):
+    """O serviço realtime roda no Docker; aqui as bibliotecas dele viram dublês."""
+
+    def load(self, environment):
+        import importlib
+        import os
+        import sys
+        from types import ModuleType
+
+        fakes = {name: ModuleType(name) for name in ("fastapi", "faster_whisper", "huggingface_hub",
+                                                     "huggingface_hub.errors", "streaming_engine")}
+        fastapi = fakes["fastapi"]
+        fastapi.FastAPI = Mock()
+        fastapi.WebSocket, fastapi.WebSocketDisconnect = object, Exception
+        fakes["faster_whisper"].WhisperModel = Mock()
+        fakes["huggingface_hub"].hf_hub_download = Mock()
+        fakes["huggingface_hub.errors"].LocalEntryNotFoundError = Exception
+        fakes["streaming_engine"].StreamingSession = Mock()
+        sys.modules.pop("worker.realtime", None)
+        self.addCleanup(sys.modules.pop, "worker.realtime", None)
+        with patch.dict(sys.modules, fakes), patch.dict(os.environ, environment, clear=False):
+            if "WHISPER_INITIAL_PROMPT" not in environment:
+                os.environ.pop("WHISPER_INITIAL_PROMPT", None)
+            return importlib.import_module("worker.realtime")
+
+    def test_vocabulario_de_comandos_vem_por_padrao(self):
+        realtime = self.load({})
+        prompt = realtime.transcription_options()["initial_prompt"]
+        for command in ("deletar", "apagar tudo", "limpar campo", "copiar", "colar", "mostrar janelas"):
+            self.assertIn(command, prompt)
+
+    def test_variavel_vazia_mantem_o_padrao_e_preenchida_substitui(self):
+        self.assertEqual(self.load({"WHISPER_INITIAL_PROMPT": "  "}).INITIAL_PROMPT,
+                         self.load({}).DEFAULT_PROMPT)
+        self.assertEqual(self.load({"WHISPER_INITIAL_PROMPT": "Comandos: abra, feche."})
+                         .transcription_options()["initial_prompt"], "Comandos: abra, feche.")
+
+
 if __name__ == "__main__":
     unittest.main()
