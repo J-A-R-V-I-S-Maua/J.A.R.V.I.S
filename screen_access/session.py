@@ -7,6 +7,16 @@ from .commands import CANCEL, CONFIRM, FIELD_COMMANDS, action_command, normalize
 from .matching import choose
 from .scroll import parse_scroll, ScrollOutcome
 
+# Mission Control no macOS: True abre, False fecha.
+WINDOW_COMMANDS = {normalized(text): opened for text, opened in (
+    ("mostrar janelas", True), ("mostre as janelas", True), ("mostrar as janelas", True),
+    ("mostrar todas as janelas", True), ("ver janelas", True), ("ver as janelas", True),
+    ("fechar janelas", False), ("feche as janelas", False), ("fechar as janelas", False),
+    ("esconder janelas", False), ("esconda as janelas", False), ("esconder as janelas", False),
+)}
+# Durante o ditado é texto; durante uma execução ou leitura, espera o resultado.
+WINDOW_COMMAND_STATES = frozenset({"idle", "choosing", "confirming", "scroll_choosing", "scroll_waiting"})
+
 
 class ActionState(Enum):
     IDLE = "idle"
@@ -144,6 +154,16 @@ class ScreenSession:
         self.view("Rolando para cima…" if request.direction == "up" else "Rolando para baixo…")
         self.executor.submit(self.token, "scroll", self.scroll_snapshot, self.scroll_selected, request)
 
+    def _mission_control(self, opened):
+        if self.unavailable:
+            self.view(self.unavailable)
+            return
+        self.cancel("")  # uma proposta pendente fica para trás: as janelas vão mudar de lugar
+        self.state = ActionState.EXECUTING
+        self.token += 1
+        self.view("Mostrando as janelas…" if opened else "Fechando as janelas…")
+        self.executor.submit(self.token, "mission_control", opened)
+
     def _scroll_prompt(self):
         return self.scroll_message + " Diga mais, para cima, para baixo ou parar."
 
@@ -229,6 +249,8 @@ class ScreenSession:
             self.cancel("Enter enviado ao campo.")
         elif kind in ("activate", "open_item", "context_menu"):
             self.cancel("Pedido aceito pelo aplicativo.")
+        elif kind == "mission_control":
+            self.cancel("Janelas à mostra. Diga mostrar números para escolher uma." if data else "Janelas fechadas.")
 
     def confirm_dictation(self):
         self.state = ActionState.CONFIRMING
@@ -276,6 +298,9 @@ class ScreenSession:
                 self.end_scroll()
             else:
                 self.cancel("Números ocultados." if "numeros" in phrase else "Ação cancelada.")
+            return True
+        if phrase in WINDOW_COMMANDS and self.state.value in WINDOW_COMMAND_STATES:
+            self._mission_control(WINDOW_COMMANDS[phrase])
             return True
         request = parse_scroll(text, self.scroll_request)
         if self.state is ActionState.CONFIRMING:

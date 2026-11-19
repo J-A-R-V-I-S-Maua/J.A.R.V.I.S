@@ -8,6 +8,7 @@ from .permissions import has_accessibility_permission
 from ApplicationServices import AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue
 
 DESKTOP_PREFIX = "desktop:"
+MISSION_CONTROL_PREFIX = "missioncontrol:"
 FIELD_NAME_LIMIT = 60
 MAX_ANCESTORS = 64  # nenhuma árvore real é tão funda; o limite só impede um laço sem fim
 
@@ -47,6 +48,18 @@ class MacOSBackend(Backend):
     def is_desktop(window):
         return window.identity.startswith(DESKTOP_PREFIX)
 
+    @staticmethod
+    def is_mission_control(window):
+        return window.identity.startswith(MISSION_CONTROL_PREFIX)
+
+    def mission_control_window(self):
+        dock_pid = macos.pid_for_bundle(macos_shell.DOCK)
+        root = macos_shell.mission_control(dock_pid)
+        frame = macos.element_frame(root) if root is not None else None
+        if frame is None:
+            return None
+        return Window(f"{MISSION_CONTROL_PREFIX}{dock_pid}", dock_pid, "Mission Control", frame)
+
     def desktop_window(self, pid):
         roots = macos_shell.desktop_roots(pid)
         frame = macos.element_frame(roots[0]) if roots else None
@@ -55,6 +68,10 @@ class MacOSBackend(Backend):
         return Window(f"{DESKTOP_PREFIX}{pid}", pid, "Área de trabalho", frame)
 
     def foreground(self):
+        # Aberto, o Mission Control cobre tudo: ele é a "janela" que a pessoa está vendo.
+        mission_control = self.mission_control_window()
+        if mission_control is not None:
+            return mission_control
         pid, name = macos.frontmost_application()
         native = macos.front_window(pid)
         # Clicar na mesa deixa o Finder ativo, e ele entrega a própria mesa (uma rolagem, não uma
@@ -68,6 +85,11 @@ class MacOSBackend(Backend):
         return Window(self.identity(pid, native), pid, macos.window_title(native) or name, macos.element_frame(native))
 
     def root(self, window):
+        if self.is_mission_control(window):
+            native = macos_shell.mission_control(window.pid)
+            if native is None:
+                raise ScreenError("O Mission Control foi fechado.")
+            return native
         native = macos.front_window(window.pid)
         if native is None or self.identity(window.pid, native) != window.identity:
             raise ScreenError("A janela mudou.")
@@ -78,6 +100,7 @@ class MacOSBackend(Backend):
             roots = macos_shell.desktop_roots(window.pid)
             return bool(roots) and macos.element_frame(roots[0]) == window.frame
         try:
+            # Vale também para o Mission Control: root() falha assim que ele fecha.
             return macos.element_frame(self.root(window)) == window.frame
         except ScreenError:
             return False
@@ -85,6 +108,9 @@ class MacOSBackend(Backend):
     def walk(self, window, max_depth):
         if self.is_desktop(window):
             yield from self._walk_shell(window)
+            return
+        if self.is_mission_control(window):
+            yield from self._walk_mission_control(window)
             return
         macos.enable_web_accessibility(window.pid)
         if window.frame is None:
@@ -108,10 +134,17 @@ class MacOSBackend(Backend):
                 self.shell_elements.add(item)
                 yield 1, item, None
 
+    def _walk_mission_control(self, window):
+        """Janelas e mesas do Mission Control; o AXPress de cada uma leva até ela."""
+        self.shell_elements = set()
+        for item in macos_shell.mission_control_items(self.root(window)):
+            self.shell_elements.add(item)
+            yield 1, item, window.frame
+
     @staticmethod
     def shell_action(element, role):
         actions = macos.action_names(element)
-        if role == macos_shell.DOCK_ITEM and "AXPress" in actions:
+        if role in (macos_shell.DOCK_ITEM, macos_shell.MISSION_CONTROL_ITEM) and "AXPress" in actions:
             return "press"
         if macos_shell.OPEN_ACTION in actions:
             return "open"
@@ -154,6 +187,16 @@ class MacOSBackend(Backend):
             raise ScreenError("Ação cancelada antes da execução.")
         self.perform(native, action)
 
+    def mission_control(self, opened, cancelled=lambda: False):
+        if cancelled():
+            raise ScreenError("Ação cancelada antes da execução.")
+        dock_pid = macos.pid_for_bundle(macos_shell.DOCK)
+        if dock_pid is None:
+            raise ScreenError("O Dock não está em execução; o Mission Control depende dele.")
+        if not macos_shell.toggle_mission_control(opened, dock_pid):
+            raise ScreenError("O Mission Control não " + ("abriu." if opened else "fechou.") + " Tente de novo.")
+        return opened
+
     # --- Digitação no campo ativo -------------------------------------------------------------
 
     @staticmethod
@@ -163,7 +206,7 @@ class MacOSBackend(Backend):
 
     def belongs_to(self, element, window):
         """O elemento está dentro desta janela?"""
-        if self.is_desktop(window):
+        if self.is_desktop(window) or self.is_mission_control(window):
             return False
         try:
             root = self.root(window)
@@ -181,8 +224,8 @@ class MacOSBackend(Backend):
 
     def remember_focus(self, window):
         """Guarda o campo de texto que está com o cursor. O executor chama isto a cada 0,2 s."""
-        if window is None or window.pid == os.getpid() or self.is_desktop(window):
-            return  # a barra do Jarvis (ou a mesa) na frente não apaga o último campo lembrado
+        if window is None or window.pid == os.getpid() or self.is_desktop(window) or self.is_mission_control(window):
+            return  # a barra do Jarvis, a mesa ou o Mission Control na frente não apagam o último campo
         element = macos.focused_element(window.pid)
         if element is None:
             return

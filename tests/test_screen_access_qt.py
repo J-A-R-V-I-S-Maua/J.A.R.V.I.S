@@ -8,7 +8,8 @@ from PySide6.QtWidgets import QApplication
 from screen_access.backend import Element
 from screen_access.session import ActionView, ActionState
 from speakbar.controller import VoiceController, DemoController
-from speakbar.overlay import MarkerWindow, convert_frame, keep_above_dock, monitor_for_screen
+from speakbar.overlay import (MarkerWindow, convert_frame, keep_above_dock, monitor_for_screen, native_window,
+                              stay_in_mission_control)
 from wakeword.detect_microphone_service import VoiceService
 from wakeword.events import State, VoiceEvent
 
@@ -128,13 +129,17 @@ class KeepAboveDockTest(unittest.TestCase):
         objc.objc_object = Mock(return_value=Mock(window=Mock(return_value=window)))
         appkit = ModuleType("AppKit")
         appkit.NSStatusWindowLevel = 25
+        appkit.NSWindowCollectionBehaviorCanJoinAllSpaces = 1
+        appkit.NSWindowCollectionBehaviorMoveToActiveSpace = 2
+        appkit.NSWindowCollectionBehaviorStationary = 16
         return objc, appkit
 
-    def run_on(self, platform, window):
+    def run_on(self, platform, window, adjust=keep_above_dock, qt_platform="cocoa"):
         objc, appkit = self.fake_cocoa(window)
         widget = Mock(winId=Mock(return_value=1234))
-        with patch.object(sys, "platform", platform), patch.dict(sys.modules, {"objc": objc, "AppKit": appkit}):
-            keep_above_dock(widget)
+        with patch.object(sys, "platform", platform), patch.dict(sys.modules, {"objc": objc, "AppKit": appkit}), \
+                patch("speakbar.overlay.QApplication.platformName", return_value=qt_platform):
+            adjust(widget)
         return objc
 
     def test_no_macos_sobe_a_camada_para_acima_do_dock(self):
@@ -159,12 +164,35 @@ class KeepAboveDockTest(unittest.TestCase):
         self.run_on("darwin", window)
 
     def test_ao_mostrar_a_janela_de_marcadores_a_camada_e_ajustada(self):
-        with patch("speakbar.overlay.keep_above_dock") as raised:
+        with patch("speakbar.overlay.keep_above_dock") as raised, patch("speakbar.overlay.stay_in_mission_control") as stays:
             window = MarkerWindow(APP.primaryScreen())
             window.show()
             raised.assert_called_once_with(window)
+            stays.assert_called_once_with(window)
             window.close()
             window.deleteLater()
+
+    def test_janela_estacionaria_continua_por_cima_do_mission_control(self):
+        window = Mock(collectionBehavior=Mock(return_value=2 | 64))  # Qt: "mesa ativa" e outra marca qualquer
+        self.run_on("darwin", window, stay_in_mission_control)
+        window.setCollectionBehavior_.assert_called_once_with(64 | 16 | 1)
+
+    def test_sem_plataforma_cocoa_nada_toca_no_objc(self):
+        # Com "offscreen" (os testes), converter o winId derrubaria o processo.
+        window = Mock()
+        objc = self.run_on("darwin", window, stay_in_mission_control, qt_platform="offscreen")
+        objc.objc_object.assert_not_called()
+        self.assertIsNone(native_window(Mock()))
+
+    def test_speakbar_tambem_continua_visivel_no_mission_control(self):
+        from speakbar.window import Speakbar
+
+        with patch("speakbar.overlay.stay_in_mission_control") as stays:
+            bar = Speakbar(demo=True)
+            bar.show()
+            stays.assert_called_with(bar)
+            bar.close()
+            bar.deleteLater()
 
 
 class ControllerFlowTest(unittest.TestCase):
