@@ -99,7 +99,7 @@ basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
 
-### Rolagem por voz (Windows)
+### Rolagem por voz (Windows e macOS)
 
 Diga **Hey Jarvis** e **“role para baixo”** ou **“role para cima”**. A rolagem é
 executada diretamente, sem confirmação. Também aceita “rolar para baixo”, “descer
@@ -143,9 +143,17 @@ para escolher um controle (a ação ainda exige confirmação), ou continue rola
 Uma confirmação pendente precisa ser concluída ou cancelada antes de rolar.
 Durante ditado, “role para baixo” é texto literal. Trocar de janela encerra a sessão.
 
-O suporte usa `ScrollPattern` do UI Automation, sem roda do mouse ou teclas como
+No Windows, o suporte usa `ScrollPattern` do UI Automation, sem roda do mouse ou teclas como
 fallback. Aplicativos que não expõem esse padrão, incluindo alguns componentes Qt,
 informam indisponibilidade. A versão atual não inclui rolagem horizontal nem contínua.
+
+No macOS, aplicativos nativos (Finder, Notas, Ajustes) expõem a barra de rolagem pela
+acessibilidade, e a rolagem funciona como no Windows, com posição e início/fim. Páginas web
+e aplicativos Electron (Chrome, Cursor, WhatsApp) não expõem a barra: neles, o J.A.R.V.I.S.
+envia a rolagem do trackpad no centro da área rolável (ou da janela, quando nenhuma área
+aparece), em passos suaves, sem mover o cursor nem clicar. Antes, confere se a janela do
+aplicativo é a que está por cima naquele ponto; outra janela por cima cancela a rolagem.
+Como a página não informa a posição, a barra mostra **“Rolagem solicitada ao aplicativo”**.
 O teste isolado `.venv\Scripts\python.exe tests/scroll_native_check.py` verifica
 duas áreas nativas, as intensidades, direções, limites e cancelamento.
 

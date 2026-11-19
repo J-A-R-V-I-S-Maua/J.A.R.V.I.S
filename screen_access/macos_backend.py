@@ -1,10 +1,12 @@
 """Adaptação da AX API existente ao contrato compartilhado."""
 import os
+import time
 import uuid
 
 from . import macos, macos_shell
 from .backend import Backend, Element, ScreenError, Snapshot, Window
 from .permissions import has_accessibility_permission
+from .scroll import SCROLL_DURATIONS, SCROLL_FRAME_SECONDS, ScrollMixin, ScrollOutcome, ScrollTargets
 from ApplicationServices import AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue
 
 DESKTOP_PREFIX = "desktop:"
@@ -19,7 +21,40 @@ def short_name(text):
     return text if len(text) <= FIELD_NAME_LIMIT else text[:FIELD_NAME_LIMIT].rstrip() + "…"
 
 
-class MacOSBackend(Backend):
+class AXScrollPattern:
+    """Barra de rolagem AX com a mesma interface do ScrollPattern do UIA (porcentagens de 0 a 100)."""
+
+    def __init__(self, area):
+        self.area = area
+        self.bar = macos.read_attribute(area, "AXVerticalScrollBar")
+
+    @property
+    def VerticallyScrollable(self):
+        return self.bar is not None and macos.is_settable(self.bar, "AXValue")
+
+    @property
+    def VerticalScrollPercent(self):
+        return float(macos.read_attribute(self.bar, "AXValue")) * 100
+
+    @property
+    def VerticalViewSize(self):
+        """Quanto do conteúdo cabe na área. Sem a altura do conteúdo, 100: só o passo nativo da barra."""
+        area = macos.element_frame(self.area)
+        contents = macos.read_attribute(self.area, "AXContents") or ()
+        heights = [frame[3] for frame in map(macos.element_frame, contents) if frame]
+        if area is None or not heights or max(heights) <= area[3]:
+            return 100.0
+        return 100 * area[3] / max(heights)
+
+    def SetScrollPercent(self, horizontal, vertical, waitTime=0):
+        return macos.set_attribute(self.bar, "AXValue", vertical / 100) == 0
+
+    def Scroll(self, horizontal, vertical, waitTime=0):
+        action = "AXIncrement" if vertical in (3, 4) else "AXDecrement"  # UIA: 3 e 4 descem
+        return action in macos.action_names(self.bar) and macos.perform_action(self.bar, action) == 0
+
+
+class MacOSBackend(ScrollMixin, Backend):
     def __init__(self):
         super().__init__()
         # Controles da mesa e do Dock lidos na última varredura; só eles usam a classificação de shell.
@@ -307,3 +342,120 @@ class MacOSBackend(Backend):
         if cancelled() or not self._still_focused(snapshot, element):
             raise ScreenError("O foco mudou. A limpeza do campo foi interrompida.")
         macos.press_key(macos.KEY_DELETE)
+
+    # --- Rolagem ---------------------------------------------------------------------------
+
+    @staticmethod
+    def scroll_pattern(native):
+        return AXScrollPattern(native)
+
+    def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
+        """Áreas roláveis visíveis da janela; a que contém o foco já vem escolhida.
+
+        Apps nativos expõem a barra de rolagem (modo "bar"). Páginas web e apps Electron não
+        expõem: aí vale o evento de rolagem (modo "wheel") na área ou, sem área, na janela.
+        """
+        if max_depth < 0 or not 1 <= max_elements <= 10000:
+            raise ScreenError("Limites de leitura inválidos.")
+        if window is None or window.pid == os.getpid():
+            raise ScreenError("Selecione uma janela de aplicativo antes de rolar.")
+        self._check_scroll_window(window, cancelled)
+        self.scroll_references = {}
+        self.scroll_snapshot = None
+        bars, wheels, truncated = [], [], False
+        began = time.monotonic()
+        for visited, (_, native, clip) in enumerate(self.walk(window, max_depth)):
+            if cancelled():
+                raise ScreenError("Rolagem cancelada.")
+            if visited >= max_elements or time.monotonic() - began >= 5:
+                truncated = True
+                break
+            try:
+                if macos.element_role(native) != "AXScrollArea":
+                    continue
+                frame = macos.element_frame(native)
+                if frame is None or (clip is not None and not macos.is_visible(native, clip)):
+                    continue
+                found = bars if self.scroll_pattern(native).VerticallyScrollable else wheels
+                if len(found) >= 200:
+                    truncated = True
+                    break
+                found.append((native, frame, clip))
+            except Exception:
+                truncated = True
+        areas, mode = (bars, "bar") if bars else (wheels, "wheel")
+        shell = self.is_desktop(window) or self.is_mission_control(window)
+        if not areas and not truncated and not shell and window.frame is not None:
+            areas = [(self.root(window), window.frame, None)]  # Electron: nenhuma área exposta
+        elements = []
+        for native, frame, clip in areas:
+            number = len(elements) + 1
+            role = macos.element_role(native)
+            name = macos.element_name(native) if role == "AXScrollArea" else ""
+            elements.append(Element(number, name or f"Área rolável {number}", role, frame, "scroll"))
+            self.scroll_references[number] = (native, frame, clip, name, role, mode)
+        self.scroll_snapshot = Snapshot(uuid.uuid4().hex, window, tuple(elements), truncated=truncated)
+        preferred = None if truncated else self._focused_area(window)
+        if preferred is None and len(elements) == 1 and not truncated:
+            preferred = 1
+        self._check_scroll_window(window, cancelled)
+        return ScrollTargets(self.scroll_snapshot, preferred)
+
+    def scroll(self, snapshot, number, request, cancelled=lambda: False):
+        reference = self.scroll_references.get(number)
+        if reference is None or reference[5] != "wheel":
+            return super().scroll(snapshot, number, request, cancelled)
+        if request.direction not in ("up", "down") or request.intensity not in ("small", "normal", "page"):
+            raise ScreenError("Comando de rolagem inválido.")
+        native = self._validate_scroll_area(snapshot, number, cancelled)
+        x, y, width, height = reference[1]
+        point = (x + width / 2, y + height / 2)
+        # O evento vai para quem estiver por cima naquele ponto, não necessariamente para o alvo.
+        if macos.window_owner_at(point, ignore={os.getpid()}) != snapshot.window.pid:
+            raise ScreenError("Outra janela está por cima da área. Rolagem cancelada.")
+        distance = height * {"small": .15, "normal": .5, "page": .9}[request.intensity]
+        sign = -1 if request.direction == "down" else 1
+        steps = max(1, round(SCROLL_DURATIONS[request.intensity] / SCROLL_FRAME_SECONDS))
+        sent = 0
+        for step in range(1, steps + 1):
+            if step > 1:
+                time.sleep(SCROLL_FRAME_SECONDS)
+                self._validate_scroll_area(snapshot, number, cancelled)
+            progress = step / steps
+            # A mesma curva da rolagem pela barra: começa e termina devagar.
+            delta = round(distance * progress * progress * (3 - 2 * progress)) - sent
+            if delta:
+                macos.scroll_wheel(point, sign * delta)
+                sent += delta
+        # A página não informa a posição pela acessibilidade; só dá para dizer que foi pedido.
+        return ScrollOutcome.REQUESTED
+
+    def _focused_area(self, window):
+        """O número da área rolável que contém o foco (ou o último foco lembrado nesta janela)."""
+        focused = macos.focused_element(window.pid)
+        if focused is None and self.last_focus and self.last_focus[0] == window.identity:
+            focused = self.last_focus[1]
+        for _ in range(MAX_ANCESTORS):
+            if focused is None:
+                return None
+            for number, reference in self.scroll_references.items():
+                if macos.same_element(reference[0], focused):
+                    return number
+            focused = macos.parent(focused)
+        return None
+
+    def _validate_scroll_area(self, snapshot, number, cancelled):
+        self._check_scroll_window(snapshot.window, cancelled)
+        if self.scroll_snapshot is None or snapshot.token != self.scroll_snapshot.token or number not in self.scroll_references:
+            raise ScreenError("A área rolável expirou. Repita o comando.")
+        native, frame, clip, name, role, _ = self.scroll_references[number]
+        try:
+            unchanged = (macos.element_role(native) == role and macos.element_frame(native) == frame
+                         and (role != "AXScrollArea" or macos.element_name(native) == name)
+                         and (clip is None or macos.is_visible(native, clip))
+                         and self.belongs_to(native, snapshot.window))
+        except Exception as exc:
+            raise ScreenError("A área rolável ficou indisponível. Repita o comando.") from exc
+        if not unchanged:
+            raise ScreenError("A área rolável mudou. Repita o comando.")
+        return native

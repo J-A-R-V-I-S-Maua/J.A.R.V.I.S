@@ -51,3 +51,24 @@ class MacOSBackendTest(unittest.TestCase):
                 with module.MacOSBackend():
                     pass
         sys.modules.pop("screen_access.macos_backend", None)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "usa o AppKit de verdade")
+class FrontmostApplicationTest(unittest.TestCase):
+    def test_app_da_frente_vem_da_acessibilidade_e_nao_fica_preso(self):
+        # O NSWorkspace só se atualiza num processo que trata eventos do macOS; num script, ou no
+        # "python -m screen_access", ficaria preso no app que estava na frente ao começar.
+        import screen_access
+
+        loaded = "screen_access.macos" in sys.modules
+        macos = importlib.import_module("screen_access.macos")
+        if not loaded:
+            # Os outros testes trocam este módulo por um dublê; o verdadeiro não pode ficar no pacote.
+            self.addCleanup(sys.modules.pop, "screen_access.macos", None)
+            self.addCleanup(lambda: hasattr(screen_access, "macos") and delattr(screen_access, "macos"))
+        app = Mock(localizedName=Mock(return_value="Finder"))
+        with patch.object(macos, "keyboard_pid", return_value=635), \
+                patch.object(macos, "NSRunningApplication") as running:
+            running.runningApplicationWithProcessIdentifier_.return_value = app
+            self.assertEqual(macos.frontmost_application(), (635, "Finder"))
+        running.runningApplicationWithProcessIdentifier_.assert_called_once_with(635)

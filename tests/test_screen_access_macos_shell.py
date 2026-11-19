@@ -385,3 +385,94 @@ class MissionControlToggleTest(unittest.TestCase):
         env = Environment(self, dock_running=False)
         with self.assertRaisesRegex(env.module.ScreenError, "Dock"):
             env.backend.mission_control(True)
+
+
+class ScrollTest(unittest.TestCase):
+    """Janela de pasta do Finder com uma lista três vezes mais alta que a área visível."""
+
+    def setUp(self):
+        self.env = env = Environment(self, front="window")
+        env.roles["bar"], env.roles["list"] = "AXScrollBar", "AXOutline"
+        env.frames["list"] = (100, 130, 600, 1110)
+        env.children["windowarea"] = ("list",)
+        env.attrs[("windowarea", "AXContents")] = ("list",)
+        self.settable = set()
+        self.wheel = []
+        self.owner = FINDER
+
+        def walk_with_clip(element, max_depth, clip, depth=0):
+            yield depth, element, clip
+            for child in env.children.get(element, ()):
+                yield from walk_with_clip(child, max_depth, clip, depth + 1)
+
+        def set_attribute(element, name, value):
+            env.attrs[(element, name)] = value
+            return 0
+
+        macos = env.macos
+        macos.walk_with_clip = walk_with_clip
+        macos.is_settable = lambda element, name: (element, name) in self.settable
+        macos.set_attribute = set_attribute
+        macos.focused_element = lambda pid: None
+        macos.parent = lambda element: next((key for key, kids in env.children.items() if element in kids), None)
+        macos.same_element = lambda a, b: a is not None and a == b
+        macos.scroll_wheel = lambda point, pixels: self.wheel.append((point, pixels))
+        macos.window_owner_at = lambda point, ignore=(): self.owner
+        self.window = env.backend.foreground()
+
+    def with_bar(self):
+        self.env.attrs[("windowarea", "AXVerticalScrollBar")] = "bar"
+        self.env.attrs[("bar", "AXValue")] = 0.0
+        self.settable.add(("bar", "AXValue"))
+
+    def test_app_nativo_rola_pela_barra_e_confirma_o_movimento(self):
+        from screen_access.scroll import ScrollOutcome, ScrollRequest
+
+        self.with_bar()
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.assertEqual([(item.role, item.action) for item in targets.snapshot.elements], [("AXScrollArea", "scroll")])
+        self.assertEqual(targets.preferred, 1)
+        outcome = self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("down", "small"))
+        self.assertEqual(outcome, ScrollOutcome.MOVED)
+        # Visível: um terço da lista. "Um pouco" anda 15% da altura visível.
+        self.assertAlmostEqual(self.env.attrs[("bar", "AXValue")], 0.075)
+        self.assertEqual(self.wheel, [])
+
+    def test_area_sem_barra_recebe_rolagem_do_trackpad_no_centro(self):
+        from screen_access.scroll import ScrollOutcome, ScrollRequest
+
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.assertEqual(self.env.backend.scroll_references[1][5], "wheel")
+        with patch.object(self.env.module.time, "sleep"):
+            outcome = self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("down", "normal"))
+        self.assertEqual(outcome, ScrollOutcome.REQUESTED)  # a página não diz onde está
+        self.assertEqual({point for point, _ in self.wheel}, {(400.0, 315.0)})
+        self.assertEqual(sum(pixels for _, pixels in self.wheel), -185)  # metade da altura, para baixo
+        self.assertGreater(len(self.wheel), 5)  # em vários passos, não num salto só
+
+    def test_sem_area_exposta_rola_a_janela_inteira(self):
+        from screen_access.scroll import ScrollRequest
+
+        self.env.children["window"] = ()  # como o Cursor e outros apps Electron
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.assertEqual([item.role for item in targets.snapshot.elements], ["AXWindow"])
+        with patch.object(self.env.module.time, "sleep"):
+            self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("up", "page"))
+        self.assertEqual({point for point, _ in self.wheel}, {(400.0, 300.0)})
+        self.assertEqual(sum(pixels for _, pixels in self.wheel), 360)  # 90% da janela, para cima
+
+    def test_outra_janela_por_cima_cancela_sem_rolar(self):
+        from screen_access.scroll import ScrollRequest
+
+        targets = self.env.backend.prepare_scroll(self.window)
+        self.owner = OTHER
+        with self.assertRaisesRegex(self.env.module.ScreenError, "por cima"):
+            self.env.backend.scroll(targets.snapshot, 1, ScrollRequest("down", "normal"))
+        self.assertEqual(self.wheel, [])
+
+    def test_mesa_e_mission_control_nao_viram_area_rolavel(self):
+        env = Environment(self, front="desk")
+        env.macos.window_owner_at = lambda point, ignore=(): FINDER
+        env.macos.focused_element = lambda pid: None
+        targets = env.backend.prepare_scroll(env.backend.foreground())
+        self.assertEqual(targets.snapshot.elements, ())
