@@ -29,6 +29,21 @@ class NumbersTest(unittest.TestCase):
         self.assertIsNone(classify_reply("confirmar agora por favor mesmo"))
         self.assertIsNone(classify_reply("uma frase longa sobre confirmar uma ação"))
 
+    def test_palavras_de_resposta_dentro_de_comandos_nao_cancelam(self):
+        # "para", "voltar", "sair" e "não" também aparecem em comandos e em textos ditados.
+        for phrase in ("role para baixo", "para cima", "clique em voltar", "digitar não sei", "sair da conta"):
+            self.assertIsNone(classify_reply(phrase), phrase)
+        self.assertEqual(classify_reply("não, cancela isso"), Reply.CANCEL)
+        self.assertEqual(classify_reply("para"), Reply.CANCEL)
+
+    def test_rolagem_continua_funcionando_com_as_novas_respostas(self):
+        executor, views = Mock(), []
+        session = ScreenSession(executor, views.append)
+        session.receive(0, "foreground", snapshot().window)
+        session.begin_capture()
+        self.assertTrue(session.handle("role para baixo"))
+        self.assertEqual(executor.submit.call_args.args[1], "prepare_scroll")
+
     def test_special_click_commands_and_numbers(self):
         for phrase in ("clique duas vezes na Lixeira", "duplo clique na Lixeira", "clique duplo em Lixeira"):
             self.assertEqual(action_command(phrase), ("open_item", "lixeira"))

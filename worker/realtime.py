@@ -20,28 +20,33 @@ MODEL_NAME = "small"
 # Vocabulário dos comandos: sem ele, palavras soltas como "deletar" saem "Delistar" ou "Militário".
 # Medido com as vozes do macOS: "deletar" foi de 1 para 4 acertos em 4 e as formas do colar de 13
 # para 20 em 20, sem mudar o ditado. O cabeçalho fica: sem ele, um "ok" virou "Colar aqui."
+# Um cabeçalho só: um segundo ("Comandos em português: …") vazou como texto num "ok".
 # WHISPER_INITIAL_PROMPT troca este texto por outro.
 DEFAULT_PROMPT = ("Comandos do Jarvis: deletar, apagar tudo, limpar campo, copiar, colar, colar texto, "
-                  "cole aqui, recortar, selecionar tudo, mostrar números, mostrar janelas, confirmar, cancelar.")
+                  "cole aqui, recortar, selecionar tudo, mostrar números, mostrar janelas, digitar, "
+                  "confirmar, cancelar, sim, não.")
 INITIAL_PROMPT = os.getenv("WHISPER_INITIAL_PROMPT", "").strip() or DEFAULT_PROMPT
 
 
+def without_prompt_echo(text):
+    """Às vezes, numa fala curta ("ok"), o Whisper devolve o começo do próprio prompt. Isso não é fala."""
+    plain = text.strip(" .!?,").casefold()
+    return "" if plain and INITIAL_PROMPT.casefold().startswith(plain) else text
+
+
 def transcription_options():
-    prompt = "Comandos em português: confirmar, cancelar, sim, não, mostrar números, digitar."
-    if INITIAL_PROMPT:
-        prompt = INITIAL_PROMPT + " " + prompt
+    # Sem max_new_tokens: o limite de 12 cortava o ditado ("…comprar arroz" sem o resto da frase).
     return dict(
         language="pt",
         beam_size=5,
         temperature=0.0,
         condition_on_previous_text=False,
         without_timestamps=True,
-        max_new_tokens=12,
         no_speech_threshold=0.6,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 200},
         hotwords="sim, não, confirmar, cancelar",
-        initial_prompt=prompt,
+        initial_prompt=INITIAL_PROMPT,
     )
 
 
@@ -100,7 +105,7 @@ async def transcribe_stream(socket: WebSocket):
                     if getattr(segment, "no_speech_prob", 0.0) <= 0.6
                     and getattr(segment, "avg_logprob", -1.0) >= -1.0
                 ]
-                text = " ".join(" ".join(kept).split())
+                text = without_prompt_echo(" ".join(" ".join(kept).split()))
                 logging.getLogger("uvicorn.error").info(
                     "stream inference audio=%.2fs elapsed=%.3fs", len(samples) / 16000,
                     time.monotonic() - began)
