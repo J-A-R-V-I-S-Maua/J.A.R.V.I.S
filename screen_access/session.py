@@ -3,8 +3,18 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 import time
-from .commands import (CANCEL, CONFIRM, FIELD_COMMANDS, action_command, field_command, normalized, parse_number,
-                       select_command)
+from .commands import (
+    CANCEL,
+    CONFIRM,
+    FIELD_COMMANDS,
+    action_command,
+    field_command,
+    normalized,
+    parse_number,
+    select_command,
+    Reply,
+    classify_reply
+)
 from .matching import choose
 from .scroll import parse_scroll, ScrollOutcome
 
@@ -313,7 +323,10 @@ class ScreenSession:
             self.cancel("Interação expirada. Repita o comando.")
             return True
         phrase = normalized(text)
-        if phrase in CANCEL or phrase in {"esconder numeros", "ocultar numeros"}:
+        reply = classify_reply(text)
+        dictation_cancel = self.state is ActionState.DICTATING and phrase in CANCEL
+        if (dictation_cancel or (self.state is not ActionState.DICTATING and reply is Reply.CANCEL)
+                or phrase in {"esconder numeros", "ocultar numeros"}):
             if self.scroll_request is not None and "numeros" not in phrase:
                 self.end_scroll()
             else:
@@ -327,7 +340,7 @@ class ScreenSession:
             if request:
                 self.help("Diga confirmar ou cancelar antes de rolar a tela.")
                 return True
-            if phrase in CONFIRM:
+            if reply is Reply.CONFIRM:
                 self.state = ActionState.EXECUTING
                 self.token += 1
                 if self.is_dictation:

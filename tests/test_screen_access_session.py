@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 from screen_access.backend import Element, Snapshot, Window
-from screen_access.commands import action_command, number_name, parse_number, select_command
+from screen_access.commands import Reply, action_command, classify_reply, number_name, parse_number, select_command
 from screen_access.session import ActionState, ScreenSession
 
 
@@ -17,6 +17,18 @@ def snapshot():
 
 
 class NumbersTest(unittest.TestCase):
+    def test_reply_classification_is_safe_and_asymmetric(self):
+        self.assertEqual(classify_reply("confirmar"), Reply.CONFIRM)
+        self.assertEqual(classify_reply("sim por favor"), Reply.CONFIRM)
+        self.assertEqual(classify_reply("certo"), Reply.CONFIRM)
+        self.assertEqual(classify_reply("não"), Reply.CANCEL)
+        self.assertEqual(classify_reply("cancelar"), Reply.CANCEL)
+        self.assertEqual(classify_reply("sim, mas cancelar"), Reply.CANCEL)
+        self.assertIsNone(classify_reply("talvez"))
+        self.assertIsNone(classify_reply("confirmar talvez"))
+        self.assertIsNone(classify_reply("confirmar agora por favor mesmo"))
+        self.assertIsNone(classify_reply("uma frase longa sobre confirmar uma ação"))
+
     def test_special_click_commands_and_numbers(self):
         for phrase in ("clique duas vezes na Lixeira", "duplo clique na Lixeira", "clique duplo em Lixeira"):
             self.assertEqual(action_command(phrase), ("open_item", "lixeira"))
@@ -93,6 +105,17 @@ class SessionTest(unittest.TestCase):
             self.read("clique em pesquisar")
             self.session.handle(phrase)
             self.assertFalse(self.session.active)
+
+    def test_mixed_confirmation_and_fuzzy_cancel_are_not_confirmed(self):
+        self.read("clique em pesquisar")
+        self.session.handle("sim cancelar")
+        self.assertFalse(self.session.active)
+        self.assertEqual(self.executor.submit.call_count, 1)
+
+        self.session.begin_capture()
+        self.read("clique em pesquisar")
+        self.session.handle("confermar")
+        self.assertEqual(self.session.state, ActionState.EXECUTING)
 
     def test_late_reply_after_cancel_is_ignored(self):
         self.session.handle("mostrar números")
@@ -246,6 +269,13 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.executor.submit.call_args.args[1:], ("dictate", self.snapshot, "Enter e deletar"))
         self.session.cancel()
         self.assertFalse(self.session.handle("deletar arquivo"))
+
+    def test_cancel_words_remain_literal_text_during_dictation(self):
+        self.session.handle("digitar")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.session.handle("não obrigado")
+        self.session.handle("confirmar")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("dictate", self.snapshot, "não obrigado"))
 
     def test_ambiguous_invalid_number_and_no_match(self):
         self.read("clique em mais ações")

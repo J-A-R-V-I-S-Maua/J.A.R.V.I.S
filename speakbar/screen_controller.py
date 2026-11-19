@@ -1,5 +1,8 @@
 """Ponte Qt da sessão de tela. Não transporta referências COM/AX."""
+from dataclasses import replace
 import os
+import time
+import sys
 import time
 from PySide6.QtCore import QObject, QTimer, Signal
 from screen_access.executor import ScreenExecutor
@@ -13,6 +16,10 @@ class ScreenController(QObject):
 
     def __init__(self, parent=None, executor_factory=ScreenExecutor):
         super().__init__(parent)
+        self.native_overlay = None
+        if sys.platform == "linux" and os.environ.get("XDG_SESSION_TYPE") == "wayland":
+            from screen_access.overlay import OverlayController
+            self.native_overlay = OverlayController()
         self.executor = executor_factory(self.reply.emit)
         self.session = ScreenSession(self.executor, self._publish)
         self.configuration_error = None
@@ -48,6 +55,8 @@ class ScreenController(QObject):
             self.expiration.start(max(1, int(remaining * 1000)))
         else:
             self.expiration.stop()
+        if self.native_overlay and self.native_overlay.update(view.markers):
+            view = replace(view, markers=())
         self.changed.emit(view)
 
     def _reply(self, token, kind, data):
@@ -82,4 +91,6 @@ class ScreenController(QObject):
         self.expiration.stop()
         self.validation.stop()
         self.session.cancel()
+        if self.native_overlay:              # NOVO
+             self.native_overlay.close()
         self.executor.stop()

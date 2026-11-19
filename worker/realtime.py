@@ -27,9 +27,22 @@ INITIAL_PROMPT = os.getenv("WHISPER_INITIAL_PROMPT", "").strip() or DEFAULT_PROM
 
 
 def transcription_options():
-    return dict(language="pt", beam_size=5, temperature=0.0,
-                condition_on_previous_text=False, without_timestamps=True,
-                vad_filter=True, initial_prompt=INITIAL_PROMPT)
+    prompt = "Comandos em português: confirmar, cancelar, sim, não, mostrar números, digitar."
+    if INITIAL_PROMPT:
+        prompt = INITIAL_PROMPT + " " + prompt
+    return dict(
+        language="pt",
+        beam_size=5,
+        temperature=0.0,
+        condition_on_previous_text=False,
+        without_timestamps=True,
+        max_new_tokens=12,
+        no_speech_threshold=0.6,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 200},
+        hotwords="sim, não, confirmar, cancelar",
+        initial_prompt=prompt,
+    )
 
 
 def load_model():
@@ -81,10 +94,13 @@ async def transcribe_stream(socket: WebSocket):
             def infer():
                 began = time.monotonic()
                 samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
-                segments, _ = app.state.model.transcribe(
-                    samples, **transcription_options(),
-                )
-                text = " ".join(" ".join(segment.text for segment in segments).split())
+                segments, _ = app.state.model.transcribe(samples, **transcription_options())
+                kept = [
+                    segment.text for segment in segments
+                    if getattr(segment, "no_speech_prob", 0.0) <= 0.6
+                    and getattr(segment, "avg_logprob", -1.0) >= -1.0
+                ]
+                text = " ".join(" ".join(kept).split())
                 logging.getLogger("uvicorn.error").info(
                     "stream inference audio=%.2fs elapsed=%.3fs", len(samples) / 16000,
                     time.monotonic() - began)
