@@ -1,10 +1,21 @@
 """Adaptação da AX API existente ao contrato compartilhado."""
+import os
+import uuid
+
 from . import macos, macos_shell
-from .backend import Backend, ScreenError, Window
+from .backend import Backend, Element, ScreenError, Snapshot, Window
 from .permissions import has_accessibility_permission
 from ApplicationServices import AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue
 
 DESKTOP_PREFIX = "desktop:"
+FIELD_NAME_LIMIT = 60
+MAX_ANCESTORS = 64  # nenhuma árvore real é tão funda; o limite só impede um laço sem fim
+
+
+def short_name(text):
+    """Um campo sem título tem como nome o próprio texto dele: fica em uma linha só, e curta."""
+    text = " ".join(text.split())
+    return text if len(text) <= FIELD_NAME_LIMIT else text[:FIELD_NAME_LIMIT].rstrip() + "…"
 
 
 class MacOSBackend(Backend):
@@ -12,11 +23,20 @@ class MacOSBackend(Backend):
         super().__init__()
         # Controles da mesa e do Dock lidos na última varredura; só eles usam a classificação de shell.
         self.shell_elements = set()
+        # (identidade da janela, elemento): o campo de texto onde o cursor estava da última vez.
+        self.last_field = None
+        # (identidade da janela, elemento): o foco já analisado, para não refazer a conta a cada 0,2 s.
+        self.last_focus = None
 
     def __enter__(self):
         if not has_accessibility_permission():
             raise ScreenError("Autorize Acessibilidade em Ajustes do Sistema > Privacidade e Segurança.")
         return self
+
+    def __exit__(self, *args):
+        super().__exit__(*args)
+        self.last_field = None
+        self.last_focus = None
 
     @staticmethod
     def identity(pid, native):
@@ -100,6 +120,8 @@ class MacOSBackend(Backend):
     def describe(self, element, clip):
         role = macos.element_role(element)
         name = macos.element_name(element)
+        if role in macos.TEXT_INPUT_ROLES:
+            name = short_name(name)  # o "nome" pode ser o documento inteiro que está no campo
         enabled = bool(macos.read_attribute(element, "AXEnabled"))
         action = ""
         if element in self.shell_elements:
@@ -131,3 +153,114 @@ class MacOSBackend(Backend):
         if cancelled():
             raise ScreenError("Ação cancelada antes da execução.")
         self.perform(native, action)
+
+    # --- Digitação no campo ativo -------------------------------------------------------------
+
+    @staticmethod
+    def editable(element):
+        return (macos.element_role(element) in macos.TEXT_INPUT_ROLES
+                and macos.read_attribute(element, "AXEnabled") is not False)
+
+    def belongs_to(self, element, window):
+        """O elemento está dentro desta janela?"""
+        if self.is_desktop(window):
+            return False
+        try:
+            root = self.root(window)
+        except ScreenError:
+            return False
+        if macos.same_element(macos.read_attribute(element, "AXWindow"), root):
+            return True  # o caminho curto; nem todo aplicativo informa a janela do elemento
+        for _ in range(MAX_ANCESTORS):
+            if element is None:
+                return False
+            if macos.same_element(element, root):
+                return True
+            element = macos.parent(element)
+        return False
+
+    def remember_focus(self, window):
+        """Guarda o campo de texto que está com o cursor. O executor chama isto a cada 0,2 s."""
+        if window is None or window.pid == os.getpid() or self.is_desktop(window):
+            return  # a barra do Jarvis (ou a mesa) na frente não apaga o último campo lembrado
+        element = macos.focused_element(window.pid)
+        if element is None:
+            return
+        if (self.last_focus and self.last_focus[0] == window.identity
+                and macos.same_element(self.last_focus[1], element)):
+            return  # o foco não saiu do lugar desde a última olhada
+        self.last_focus = (window.identity, element)
+        self.last_field = None
+        if self.editable(element) and self.belongs_to(element, window):
+            self.last_field = (window.identity, element)
+
+    def prepare_dictation(self, window):
+        """Antes da confirmação: descobre o campo ativo e devolve uma lista com só ele, o número 1."""
+        self.remember_focus(window)
+        if not self.last_field or self.last_field[0] != window.identity:
+            raise ScreenError("Dê foco a um campo de texto e repita digitar.")
+        element = self.last_field[1]
+        if not self.window_exists(window):
+            raise ScreenError("A janela mudou. Dê foco ao campo e repita digitar.")
+        name, role, frame, action, visible, identity = self.describe(element, window.frame)
+        if not visible or not self.editable(element):
+            raise ScreenError("O campo mudou. Dê foco ao campo e repita digitar.")
+        self.references = {1: (element, identity, window.frame)}
+        self.snapshot = Snapshot(uuid.uuid4().hex, window, (Element(1, name, role, frame, action),))
+        return self.snapshot
+
+    def _still_focused(self, snapshot, element):
+        """O teclado ainda vai para este campo? Tecla simulada cai em quem estiver com o foco."""
+        pid = snapshot.window.pid
+        return macos.keyboard_pid() == pid and macos.same_element(macos.focused_element(pid), element)
+
+    def _focus_editable(self, snapshot, cancelled):
+        """Depois do "confirmar": garante que o teclado está no campo. Na dúvida, não envia nada."""
+        element, _ = self.validate(snapshot, 1)
+        window = snapshot.window
+        if not self.editable(element) or not self.belongs_to(element, window):
+            raise ScreenError("O campo não está mais disponível para digitação.")
+        current = macos.focused_element(window.pid)
+        if current is not None and not macos.same_element(current, element):
+            raise ScreenError("O campo ativo mudou. Repita o comando no campo desejado.")
+        if cancelled():
+            raise ScreenError("Digitação cancelada.")
+        if macos.keyboard_pid() != window.pid and not macos.activate_application(window.pid):
+            raise ScreenError("Não foi possível devolver o foco ao campo. Clique nele e repita o comando.")
+        if current is None:
+            # Só quando o aplicativo perdeu o foco: dar foco de novo a um campo que já o tem
+            # seleciona todo o texto dele, e a digitação apagaria o que estava escrito.
+            macos.set_attribute(element, "AXFocused", True)
+        if not self._still_focused(snapshot, element):
+            raise ScreenError("O foco mudou. Nenhum texto foi enviado.")
+        if cancelled():
+            raise ScreenError("Digitação cancelada.")
+        return element
+
+    def dictate(self, snapshot, text, cancelled=lambda: False):
+        if not text or any(ord(char) < 32 for char in text):
+            raise ScreenError("O texto deve conter uma frase sem teclas de controle.")
+        element = self._focus_editable(snapshot, cancelled)
+        # Conferido antes de cada letra: se a pessoa trocar de campo ou de aplicativo, a digitação para.
+        if not macos.type_text(text, lambda: not cancelled() and self._still_focused(snapshot, element)):
+            raise ScreenError("Digitação interrompida. Confira o texto já inserido antes de repetir.")
+
+    def press_enter(self, snapshot, number=1, cancelled=lambda: False):
+        if number != 1:
+            raise ScreenError("Campo ativo inválido.")
+        self._focus_editable(snapshot, cancelled)
+        macos.press_key(macos.KEY_RETURN)
+
+    def clear_text(self, snapshot, number=1, cancelled=lambda: False):
+        if number != 1:
+            raise ScreenError("Campo ativo inválido.")
+        element = self._focus_editable(snapshot, cancelled)
+        # Primeiro pela acessibilidade: age exatamente neste campo, sem depender de teclas.
+        # Só vale se o campo ficou mesmo vazio; há aplicativo que aceita o pedido e não faz nada.
+        if (macos.is_settable(element, "AXValue") and macos.set_attribute(element, "AXValue", "") == 0
+                and not macos.read_attribute(element, "AXValue")):
+            return
+        macos.press_key(macos.KEY_A, macos.COMMAND)  # selecionar tudo
+        if cancelled() or not self._still_focused(snapshot, element):
+            raise ScreenError("O foco mudou. A limpeza do campo foi interrompida.")
+        macos.press_key(macos.KEY_DELETE)
