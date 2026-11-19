@@ -55,20 +55,48 @@ def monitor_for_screen(name, logical, ratio, monitors):
     return candidates[0] if len(candidates) == 1 else None
 
 
+def native_window(widget):
+    """A NSWindow por trás do widget, ou None fora do macOS de verdade.
+
+    Com outra plataforma do Qt (os testes usam "offscreen"), o winId não é uma NSView e a
+    conversão derruba o processo inteiro.
+    """
+    if sys.platform != "darwin" or QApplication.platformName() != "cocoa":
+        return None
+    import objc
+
+    return objc.objc_object(c_void_p=int(widget.winId())).window()
+
+
 def keep_above_dock(widget):
     """No macOS o Dock fica na camada 20 e o "sempre no topo" do Qt só chega à 3: sem isto, os
     números dos itens do Dock ficam escondidos atrás dele. A camada 25 passa o Dock e a barra de menus."""
-    if sys.platform != "darwin":
-        return
     try:
-        import objc
-        from AppKit import NSStatusWindowLevel
-
-        window = objc.objc_object(c_void_p=int(widget.winId())).window()
+        window = native_window(widget)
         if window is not None:
+            from AppKit import NSStatusWindowLevel
+
             window.setLevel_(NSStatusWindowLevel)
     except Exception:
         logging.debug("Não foi possível subir a camada da janela de marcadores", exc_info=True)
+
+
+def stay_in_mission_control(widget):
+    """Janela "estacionária": continua por cima quando o Mission Control abre, em vez de virar
+    miniatura, e aparece em todas as mesas. Verificado num Mac real; a camada sozinha não basta."""
+    try:
+        window = native_window(widget)
+        if window is not None:
+            from AppKit import (NSWindowCollectionBehaviorCanJoinAllSpaces, NSWindowCollectionBehaviorMoveToActiveSpace,
+                                NSWindowCollectionBehaviorStationary)
+
+            # O Qt marca janelas Tool como "mover para a mesa ativa", que o macOS não aceita junto
+            # com "todas as mesas".
+            behavior = window.collectionBehavior() & ~NSWindowCollectionBehaviorMoveToActiveSpace
+            window.setCollectionBehavior_(behavior | NSWindowCollectionBehaviorStationary
+                                          | NSWindowCollectionBehaviorCanJoinAllSpaces)
+    except Exception:
+        logging.debug("Não foi possível manter a janela visível no Mission Control", exc_info=True)
 
 
 class MarkerWindow(QWidget):
@@ -92,6 +120,7 @@ class MarkerWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         keep_above_dock(self)
+        stay_in_mission_control(self)
 
     def paintEvent(self, event):
         painter = QPainter(self)

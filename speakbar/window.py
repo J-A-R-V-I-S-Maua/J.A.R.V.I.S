@@ -347,6 +347,11 @@ class Speakbar(QWidget):
             self._fit_message()
         return super().eventFilter(watched, event)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        from .overlay import stay_in_mission_control
+        stay_in_mission_control(self)  # as respostas continuam à vista com o Mission Control aberto
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
