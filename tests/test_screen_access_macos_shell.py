@@ -1,7 +1,8 @@
-"""Mesa e Dock no backend macOS, com uma árvore de acessibilidade simulada.
+"""Mesa, Dock e Mission Control no backend macOS, com uma árvore de acessibilidade simulada.
 
 A árvore espelha o que a sonda encontrou num Mac: a mesa é uma rolagem pendurada direto no
 Finder, o ícone de um PDF traz botões de página dentro, e o Dock tem separadores sem nome.
+Com o Mission Control aberto, o Dock ganha o grupo "mc", com as janelas e a barra do Spaces.
 """
 import importlib
 import sys
@@ -38,15 +39,31 @@ def build_tree():
     add("terminal", "AXDockItem", "Terminal", (314, 877, 53, 69), ("AXPress", "AXShowMenu"))
     add("trash", "AXDockItem", "Trash", (1262, 877, 53, 69), ("AXPress", "AXShowMenu"))
     attrs[("window", "AXWindowNumber")] = 7
+    # Mission Control, como lido num Mac real; só fica pendurado no Dock enquanto está aberto.
+    add("mc", "AXGroup", "Mission Control", SCREEN, kids=("display",))
+    add("display", "AXGroup", "", SCREEN, kids=("mcwindows", "spaces"))
+    add("mcwindows", "AXGroup", "", (20, 204, 1430, 654), kids=("readme", "linkedin", "mcnote"))
+    add("readme", "AXButton", "README.md — J.A.R.V.I.S", (18, 212, 470, 295), ("AXPress",))
+    add("linkedin", "AXButton", "Feed | LinkedIn", (500, 541, 470, 295), ("AXPress",))
+    add("mcnote", "AXStaticText", "texto solto", (10, 10, 50, 20))
+    add("spaces", "AXGroup", "Barra do Spaces", (0, 0, 1470, 164), kids=("spacelist", "addspace"))
+    add("spacelist", "AXList", "", (0, 0, 1470, 164), kids=("desk1", "fullscreen"))
+    add("desk1", "AXButton", "Mesa", (581, 46, 138, 90), ("AXPress",))
+    add("fullscreen", "AXButton", "Claude", (751, 46, 138, 90), ("AXPress", "AXRemoveDesktop"))
+    add("addspace", "AXButton", "", (1398, -6, 170, 170), ("AXPress",))
+    for element, identifier in (("mc", "mc"), ("display", "mc.display"), ("mcwindows", "mc.windows"),
+                                ("spaces", "mc.spaces"), ("spacelist", "mc.spaces.list"), ("addspace", "mc.spaces.add")):
+        attrs[(element, "AXIdentifier")] = identifier
     return roles, names, frames, actions, children, attrs
 
 
 class Environment:
     """Instala um `macos` falso e importa o backend por cima dele."""
 
-    def __init__(self, case, frontmost=FINDER, front="desk", dock_running=True):
+    def __init__(self, case, frontmost=FINDER, front="desk", dock_running=True, mission_control=False):
         self.roles, self.names, self.frames, self.actions, self.children, self.attrs = build_tree()
         self.frontmost, self.front, self.dock_running = frontmost, front, dock_running
+        self.set_mission_control(mission_control)
         macos = ModuleType("screen_access.macos")
         macos.read_attribute = lambda e, name: (self.children.get(e, ()) or None) if name == "AXChildren" \
             else self.attrs.get((e, name), True if name == "AXEnabled" and e == "x" else None)
@@ -97,6 +114,9 @@ class Environment:
             sys.modules.pop(f"screen_access.{name}", None)
         self.module = importlib.import_module("screen_access.macos_backend")
         self.backend = self.module.MacOSBackend()
+
+    def set_mission_control(self, opened):
+        self.children["dock"] = ("dlist", "mc") if opened else ("dlist",)
 
 
 class ForegroundTest(unittest.TestCase):
@@ -281,3 +301,87 @@ class WindowExistsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissionControlTest(unittest.TestCase):
+    def test_fechado_a_janela_da_frente_continua_sendo_a_do_aplicativo(self):
+        env = Environment(self, front="window")
+        self.assertFalse(env.backend.foreground().identity.startswith("missioncontrol:"))
+
+    def test_aberto_ele_e_a_janela_da_frente(self):
+        env = Environment(self, frontmost=OTHER, front=None, mission_control=True)
+        window = env.backend.foreground()
+        self.assertEqual((window.identity, window.pid, window.title, window.frame),
+                         (f"missioncontrol:{DOCK}", DOCK, "Mission Control", SCREEN))
+
+    def test_numera_janelas_e_mesas_sem_o_botao_de_adicionar(self):
+        env = Environment(self, mission_control=True)
+        snapshot = env.backend.scan(env.backend.foreground())
+        self.assertEqual([(item.name, item.action) for item in snapshot.elements],
+                         [("README.md — J.A.R.V.I.S", "press"), ("Feed | LinkedIn", "press"),
+                          ("Mesa", "press"), ("Claude", "press")])
+
+    def test_escolher_um_numero_leva_ate_a_janela(self):
+        env = Environment(self, mission_control=True)
+        snapshot = env.backend.scan(env.backend.foreground())
+        env.backend.activate(snapshot, 2)
+        env.macos.press.assert_called_once_with("linkedin")
+
+    def test_fechado_no_meio_do_caminho_a_lista_expira(self):
+        env = Environment(self, mission_control=True)
+        snapshot = env.backend.scan(env.backend.foreground())
+        env.set_mission_control(False)
+        with self.assertRaises(env.module.ScreenError):
+            env.backend.activate(snapshot, 1)
+        env.macos.press.assert_not_called()
+
+    def test_campo_de_texto_lembrado_nao_e_apagado_pelo_mission_control(self):
+        env = Environment(self, mission_control=True)
+        env.backend.last_field = ("app", "campo")
+        env.backend.remember_focus(env.backend.foreground())
+        self.assertEqual(env.backend.last_field, ("app", "campo"))
+
+
+class MissionControlToggleTest(unittest.TestCase):
+    def environment(self, opened=False, appears=True):
+        env = Environment(self, mission_control=opened)
+        shell = env.module.macos_shell
+        calls = []
+
+        def run(arguments, **kwargs):
+            calls.append(arguments)
+            if appears:
+                env.set_mission_control(not opened)
+
+        for patcher in (patch.object(shell.subprocess, "run", side_effect=run),
+                        patch.object(shell, "MISSION_CONTROL_WAIT", 0.05)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return env, calls
+
+    def test_mostrar_janelas_abre_pelo_app_do_sistema(self):
+        env, calls = self.environment()
+        self.assertTrue(env.backend.mission_control(True))
+        self.assertEqual(calls, [["/usr/bin/open", "-b", "com.apple.exposelauncher"]])
+        self.assertTrue(env.backend.foreground().identity.startswith("missioncontrol:"))
+
+    def test_ja_aberto_nao_alterna_de_novo(self):
+        env, calls = self.environment(opened=True)
+        env.backend.mission_control(True)
+        self.assertEqual(calls, [])
+
+    def test_fechar_janelas(self):
+        env, calls = self.environment(opened=True)
+        self.assertFalse(env.backend.mission_control(False))
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(env.backend.foreground().identity.startswith("missioncontrol:"))
+
+    def test_quando_nao_abre_explica(self):
+        env, _ = self.environment(appears=False)
+        with self.assertRaisesRegex(env.module.ScreenError, "não abriu"):
+            env.backend.mission_control(True)
+
+    def test_sem_dock_nao_tenta(self):
+        env = Environment(self, dock_running=False)
+        with self.assertRaisesRegex(env.module.ScreenError, "Dock"):
+            env.backend.mission_control(True)
