@@ -36,7 +36,7 @@ CONFIRM = {
     "confirmar", "confirme", "confirma", "confirmo", "sim", "isso", "certo",
     "pode", "claro", "positivo",
 }
-FILLERS = {"por", "favor", "a", "o", "e", "ai", "entao", "ta", "ne", "tudo", "bem"}
+FILLERS = {"por", "favor", "a", "o", "e", "mas", "ai", "entao", "ta", "ne", "tudo", "bem"}
 MAX_REPLY_TOKENS = 4
 _ALL_REPLY_WORDS = CONFIRM | CANCEL
 _FUZZY_REPLY_WORDS = {word for word in _ALL_REPLY_WORDS if len(word) >= 6}
@@ -78,11 +78,17 @@ def classify_reply(text):
             confirm += 1
         else:
             unknown += 1
+    # Só uma resposta pura vale: "para", "voltar" e "não" também aparecem em comandos e textos
+    # ("role para baixo", "clique em voltar", "digitar não sei"), que não podem virar cancelamento.
+    if unknown:
+        return None
     if cancel:
         return Reply.CANCEL
-    if confirm and not unknown:
+    if confirm:
         return Reply.CONFIRM
     return None
+
+
 FIELD_COMMANDS = {
     "enter": "press_enter", "pressionar enter": "press_enter", "pressione enter": "press_enter",
     "apertar enter": "press_enter", "deletar": "clear_text", "delete": "clear_text",

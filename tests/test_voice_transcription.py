@@ -210,6 +210,21 @@ class WhisperPromptTest(unittest.TestCase):
         # Sem o cabeçalho, o Whisper chegou a transcrever um "ok" como "Colar aqui.".
         self.assertTrue(prompt.startswith("Comandos do Jarvis:"))
 
+    def test_ditado_longo_nao_e_cortado_e_o_prompt_e_um_so(self):
+        options = self.load({}).transcription_options()
+        # max_new_tokens=12 cortava "digitar … comprar arroz, feijão e café" depois de "arroz".
+        self.assertNotIn("max_new_tokens", options)
+        self.assertEqual(options["initial_prompt"].count("Comandos"), 1)
+        for word in ("sim", "não", "digitar", "confirmar", "cancelar"):
+            self.assertIn(word, options["initial_prompt"])
+
+    def test_eco_do_prompt_vira_silencio(self):
+        realtime = self.load({})
+        for echo in ("Comandos do Jarvis", "Comandos do Jarvis.", "comandos"):
+            self.assertEqual(realtime.without_prompt_echo(echo), "")
+        for speech in ("Deletar.", "Ok.", "Digitar bom dia a todos."):
+            self.assertEqual(realtime.without_prompt_echo(speech), speech)
+
     def test_variavel_vazia_mantem_o_padrao_e_preenchida_substitui(self):
         self.assertEqual(self.load({"WHISPER_INITIAL_PROMPT": "  "}).INITIAL_PROMPT,
                          self.load({}).DEFAULT_PROMPT)
