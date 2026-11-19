@@ -1,10 +1,14 @@
 """Acesso à árvore de acessibilidade no macOS (AX API, via pyobjc)."""
+import time
 
-from AppKit import NSWorkspace
+from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSWorkspace
 from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
     AXUIElementCreateApplication,
+    AXUIElementCreateSystemWide,
+    AXUIElementGetPid,
+    AXUIElementIsAttributeSettable,
     AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
     AXValueGetValue,
@@ -22,6 +26,15 @@ from ApplicationServices import (
     kAXValueCGPointType,
     kAXValueCGSizeType,
 )
+from CoreFoundation import CFEqual
+from Quartz import (
+    CGEventCreateKeyboardEvent,
+    CGEventKeyboardSetUnicodeString,
+    CGEventPost,
+    CGEventSetFlags,
+    kCGEventFlagMaskCommand,
+    kCGHIDEventTap,
+)
 
 
 def read_attribute(element, name):
@@ -36,6 +49,17 @@ def frontmost_application():
     """Devolve (pid, nome) do aplicativo que está em primeiro plano agora."""
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     return app.processIdentifier(), app.localizedName()
+
+
+def pid_for_bundle(bundle_id):
+    """pid do processo de um aplicativo pelo identificador (ex.: com.apple.dock), ou None."""
+    apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id)
+    return apps[0].processIdentifier() if apps else None
+
+
+def application_element(pid):
+    """Elemento que representa o aplicativo inteiro (a raiz da árvore dele)."""
+    return AXUIElementCreateApplication(pid)
 
 
 WEB_ACCESSIBILITY_ATTRIBUTES = ("AXManualAccessibility", "AXEnhancedUserInterface")
@@ -94,6 +118,95 @@ def can_press(element):
     return error == kAXErrorSuccess and kAXPressAction in (actions or ())
 
 
+def action_names(element):
+    """Nomes das ações que o elemento declara (AXPress, AXOpen, AXShowMenu...)."""
+    error, actions = AXUIElementCopyActionNames(element, None)
+    return tuple(actions or ()) if error == kAXErrorSuccess else ()
+
+
+def is_settable(element, name):
+    """Verdadeiro se o atributo existe e o aplicativo aceita que ele seja alterado."""
+    error, settable = AXUIElementIsAttributeSettable(element, name, None)
+    return error == kAXErrorSuccess and bool(settable)
+
+
+def focused_element(pid):
+    """O controle que tem o foco do teclado dentro do aplicativo, ou None."""
+    return read_attribute(AXUIElementCreateApplication(pid), "AXFocusedUIElement")
+
+
+def same_element(a, b):
+    """Dois elementos lidos em momentos diferentes são o mesmo controle?"""
+    return a is not None and b is not None and bool(CFEqual(a, b))
+
+
+def parent(element):
+    return read_attribute(element, "AXParent")
+
+
+def set_attribute(element, name, value):
+    """Altera um atributo. Devolve o código de erro; 0 = aceito."""
+    return AXUIElementSetAttributeValue(element, name, value)
+
+
+def keyboard_pid():
+    """pid do aplicativo que recebe o teclado agora: é para ele que as teclas simuladas vão."""
+    application = read_attribute(AXUIElementCreateSystemWide(), "AXFocusedApplication")
+    if application is not None:
+        error, pid = AXUIElementGetPid(application, None)
+        if error == kAXErrorSuccess:
+            return pid
+    return NSWorkspace.sharedWorkspace().frontmostApplication().processIdentifier()
+
+
+def activate_application(pid, timeout=1.0):
+    """Traz o aplicativo para a frente e espera o teclado ir para ele. False se o macOS não atender."""
+    application = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    if application is None:
+        return False
+    application.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+    deadline = time.monotonic() + timeout
+    while keyboard_pid() != pid:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.03)
+    return True
+
+
+def press_key(keycode, flags=0, text=None):
+    """Aperta e solta uma tecla. Com `text`, a tecla carrega esse caractere em vez do seu próprio."""
+    for down in (True, False):
+        event = CGEventCreateKeyboardEvent(None, keycode, down)
+        # Sem isto, um Shift ou Cmd que a pessoa esteja segurando entraria na tecla simulada.
+        CGEventSetFlags(event, flags)
+        if text is not None:
+            CGEventKeyboardSetUnicodeString(event, len(text.encode("utf-16-le")) // 2, text)
+        CGEventPost(kCGHIDEventTap, event)
+
+
+# Códigos de tecla são posições físicas do teclado. Return e Delete não mudam com o layout;
+# a posição 0 é a letra A nos layouts QWERTY (ABNT2 e americano), mas não em um AZERTY.
+KEY_A = 0
+KEY_RETURN = 36
+KEY_DELETE = 51  # apagar para trás (Backspace)
+COMMAND = kCGEventFlagMaskCommand
+
+KEY_PAUSE = 0.01  # dá tempo ao aplicativo de processar cada letra na ordem
+
+
+def type_text(text, allowed=lambda: True):
+    """Digita o texto letra por letra, onde o cursor estiver. Para (e devolve False) se allowed() negar.
+
+    A letra vai dentro do evento, então acentos e símbolos não dependem do layout do teclado.
+    """
+    for char in text:
+        if not allowed():
+            return False
+        press_key(0, text=char)
+        time.sleep(KEY_PAUSE)
+    return True
+
+
 AX_ERRORS = {
     -25200: "falha genérica",
     -25202: "elemento inválido (a tela provavelmente mudou)",
@@ -105,9 +218,14 @@ AX_ERRORS = {
 }
 
 
+def perform_action(element, name):
+    """Executa uma ação nativa pelo nome (AXOpen, AXShowMenu...). Devolve o código de erro; 0 = aceito."""
+    return AXUIElementPerformAction(element, name)
+
+
 def press(element):
     """Aciona o elemento (AXPress), sem mover o cursor. Devolve o código de erro; 0 = aceito."""
-    return AXUIElementPerformAction(element, kAXPressAction)
+    return perform_action(element, kAXPressAction)
 
 
 def describe_error(code):

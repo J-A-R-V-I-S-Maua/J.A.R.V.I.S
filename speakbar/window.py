@@ -140,6 +140,8 @@ class Speakbar(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # No macOS, janelas Tool somem quando o aplicativo fica inativo, e controlar outro app é o caso de uso.
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setWindowIcon(make_icon())
         self._drag_offset = None
         self.controller = controller or (DemoController(self) if demo else VoiceController(self))
@@ -344,6 +346,11 @@ class Speakbar(QWidget):
         if watched is self.message.viewport() and event.type() == QEvent.Type.Resize:
             self._fit_message()
         return super().eventFilter(watched, event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        from .overlay import stay_in_mission_control
+        stay_in_mission_control(self)  # as respostas continuam à vista com o Mission Control aberto
 
     def paintEvent(self, event):
         painter = QPainter(self)

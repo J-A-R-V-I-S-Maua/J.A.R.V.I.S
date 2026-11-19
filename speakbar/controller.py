@@ -1,5 +1,6 @@
 """Adaptação dos eventos do serviço de voz para a thread gráfica."""
 import logging
+import sys
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -59,10 +60,16 @@ class VoiceController(QObject):
         self._processing_timer.setInterval(5000)
         self._processing_timer.timeout.connect(self._slow_processing)
         from .preferences import PreferencesService
-        from .shortcuts import ShortcutService, ShortcutConversation
+        from .shortcuts import ShortcutService
+        from .applications import ApplicationCatalog
+        from .launcher import LauncherConversation
         self.preferences = preferences or PreferencesService()
         self.shortcut_service = ShortcutService(self.preferences.shortcuts)
-        self.shortcuts = ShortcutConversation(self.shortcut_service, self)
+        # "Abrir [aplicativo]" só existe no macOS; nos outros sistemas a conversa age como a de atalhos.
+        self.applications = ApplicationCatalog() if sys.platform == "darwin" else None
+        if self.applications:
+            self.applications.applications()  # começa a ler os aplicativos já, em segundo plano
+        self.shortcuts = LauncherConversation(self.shortcut_service, self.applications, parent=self)
         self.shortcuts.changed.connect(self._show_text)
         self.shortcuts.cancelled.connect(self._invalidate_voice)
         self.shortcuts.capture_requested.connect(self._request_shortcut_response)

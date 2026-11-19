@@ -119,7 +119,10 @@ class ShortcutConversation(QObject):
         self.deadline = None
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
-        self.timer.timeout.connect(lambda: self.cancel("Atalho expirado. Repita executar atalho."))
+        self.timer.timeout.connect(self._expired)
+
+    def _expired(self):
+        self.cancel("Atalho expirado. Repita executar atalho.")
 
     def cancel(self, text=None):
         was_active = self.active

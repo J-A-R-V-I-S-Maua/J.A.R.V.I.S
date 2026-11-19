@@ -276,3 +276,66 @@ class SessionTest(unittest.TestCase):
         self.session.begin_capture()
         self.read("clique em futebol")
         self.assertFalse(self.session.active)
+
+
+class MissionControlSessionTest(unittest.TestCase):
+    def setUp(self):
+        self.executor = Mock()
+        self.views = []
+        self.session = ScreenSession(self.executor, self.views.append)
+        self.session.receive(0, "foreground", snapshot().window)
+        self.session.begin_capture()
+
+    def test_mostrar_janelas_abre_e_orienta_o_proximo_passo(self):
+        for phrase in ("mostrar janelas", "Mostre as janelas!", "ver as janelas"):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(self.session.handle(phrase))
+                self.assertEqual(self.executor.submit.call_args.args[1:], ("mission_control", True))
+                self.assertEqual(self.views[-1].text, "Mostrando as janelas…")
+                self.session.receive(self.session.token, "mission_control", True)
+                self.assertFalse(self.session.active)
+                self.assertEqual(self.views[-1].text, "Janelas à mostra. Diga mostrar números para escolher uma.")
+
+    def test_fechar_janelas(self):
+        self.session.handle("fechar janelas")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("mission_control", False))
+        self.session.receive(self.session.token, "mission_control", False)
+        self.assertEqual(self.views[-1].text, "Janelas fechadas.")
+
+    def test_numeros_pendentes_dao_lugar_as_janelas(self):
+        self.session.handle("mostrar números")
+        self.session.receive(self.session.token, "scan", snapshot())
+        self.assertEqual(self.session.state, ActionState.CHOOSING)
+        self.session.handle("mostrar janelas")
+        self.assertEqual(self.session.state, ActionState.EXECUTING)
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("mission_control", True))
+
+    def test_abrir_as_janelas_nao_e_tomado_por_troca_de_janela(self):
+        self.session.handle("mostrar janelas")
+        mission_control = Window("missioncontrol:631", 631, "Mission Control", (0, 0, 1470, 956))
+        self.session.receive(0, "foreground", mission_control)
+        self.session.receive(self.session.token, "mission_control", True)
+        self.assertEqual(self.views[-1].text, "Janelas à mostra. Diga mostrar números para escolher uma.")
+        self.session.begin_capture()
+        self.assertEqual(self.session.target, mission_control)
+
+    def test_durante_o_ditado_e_texto_e_durante_execucao_espera(self):
+        self.session.state = ActionState.DICTATING
+        self.session.snapshot = snapshot()
+        self.session.handle("mostrar janelas")
+        self.assertEqual(self.session.dictation_text, "mostrar janelas")
+        self.session.cancel()
+        self.session.state = ActionState.EXECUTING
+        self.executor.submit.reset_mock()
+        self.session.handle("mostrar janelas")
+        self.executor.submit.assert_not_called()
+
+    def test_erro_do_sistema_aparece_na_barra(self):
+        self.session.handle("mostrar janelas")
+        self.session.receive(self.session.token, "error", "O Mission Control não abriu. Tente de novo.")
+        self.assertFalse(self.session.active)
+        self.assertEqual(self.views[-1].text, "O Mission Control não abriu. Tente de novo.")
+
+
+if __name__ == "__main__":
+    unittest.main()

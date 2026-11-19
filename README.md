@@ -180,6 +180,12 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   **“não”** ou **“parar”** para abandonar a proposta. Não é necessário repetir a wake word.
 - **“Esconder números”** remove os marcadores. O botão da barra também cancela uma
   sessão pendente. Cada escolha exige sua própria confirmação.
+- **“Mostrar janelas”** (macOS): abre o Mission Control, a mesma visão do gesto de três
+  dedos para cima. Em seguida, diga **“mostrar números”**: cada janela aberta e cada mesa
+  (ou app em tela cheia) da barra do Spaces recebe um número. Diga o número e
+  **“confirmar”** para ir até ela. **“Fechar janelas”** sai do Mission Control sem escolher.
+  Também aceita “mostre as janelas”, “ver janelas” e “esconder janelas”. A speakbar e os
+  números continuam visíveis por cima do Mission Control.
 - **“Digitar olá, mundo”** (Windows): dê foco ao campo desejado e fale o comando.
   A barra mostra o texto reconhecido e pede **“confirmar”** antes de inseri-lo.
 - **“Digitar”** (Windows): a barra abre uma captura para o texto e, em seguida,

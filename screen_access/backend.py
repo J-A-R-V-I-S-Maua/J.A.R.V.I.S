@@ -150,6 +150,9 @@ class Backend:
     def clear_text(self, snapshot, number=1, cancelled=lambda: False):
         raise ScreenError("Limpeza do campo ativo indisponível neste sistema.")
 
+    def mission_control(self, opened, cancelled=lambda: False):
+        raise ScreenError("Mostrar janelas está disponível somente no macOS nesta versão.")
+
     def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
         raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
 
