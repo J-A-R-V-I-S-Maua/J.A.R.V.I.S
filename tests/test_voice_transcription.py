@@ -206,8 +206,11 @@ class WhisperPromptTest(unittest.TestCase):
     def test_vocabulario_de_comandos_vem_por_padrao(self):
         realtime = self.load({})
         prompt = realtime.transcription_options()["initial_prompt"]
-        for command in ("deletar", "apagar tudo", "limpar campo", "copiar", "colar", "mostrar janelas"):
+        for command in ("deletar", "apagar tudo", "limpar campo", "copiar", "colar texto", "cole aqui",
+                        "mostrar janelas"):
             self.assertIn(command, prompt)
+        # Sem o cabeçalho, o Whisper chegou a transcrever um "ok" como "Colar aqui.".
+        self.assertTrue(prompt.startswith("Comandos do Jarvis:"))
 
     def test_variavel_vazia_mantem_o_padrao_e_preenchida_substitui(self):
         self.assertEqual(self.load({"WHISPER_INITIAL_PROMPT": "  "}).INITIAL_PROMPT,

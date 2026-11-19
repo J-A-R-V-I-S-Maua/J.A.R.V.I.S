@@ -220,6 +220,10 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   transferência mudar depois da pergunta. Sem nada selecionado, copiar e recortar avisam em
   vez de seguir. Exemplo: “selecionar a palavra olá”, “copiar texto”; depois, em outro campo,
   “colar texto” e “confirmar”.
+- Os comandos de campo (deletar, copiar, recortar, colar, Enter) também aceitam frases que
+  apenas soam como eles, como “Polar texto” ou “Impar campo”, trocas comuns da transcrição.
+  Isso só vale quando nenhum outro comando se encaixa e quando um único comando soa parecido;
+  as ações que alteram o texto continuam pedindo confirmação.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens

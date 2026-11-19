@@ -1,5 +1,5 @@
 """Comandos explícitos e números PT-BR, sem interpretar fala livre como ação."""
-from .matching import tokenize
+from .matching import MIN_MARGIN, tokenize, word_similarity
 import re
 
 UNITS = ("zero", "um", "dois", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove")
@@ -104,3 +104,28 @@ def select_command(text):
         return "last_word", None
     match = re.fullmatch(SELECT_VERB + r" (?:a palavra|as palavras|o texto|o trecho) (.+)", phrase)
     return ("text", match[1]) if match else None
+
+
+def field_command(text):
+    """Comando de campo da frase: exato, ou o único que soa como ela ("Polar texto" é colar texto).
+
+    A transcrição troca palavras curtas por outras parecidas. Só aceita quando todas as palavras
+    soam como as de um comando e nenhuma ação diferente fica perto; nunca adivinha.
+    """
+    phrase = normalized(text)
+    if phrase in FIELD_COMMANDS:
+        return FIELD_COMMANDS[phrase]
+    words = phrase.split()
+    scored = {}
+    for key, action in FIELD_COMMANDS.items():
+        parts = key.split()
+        if len(parts) != len(words):
+            continue
+        scores = [word_similarity(word, part) for word, part in zip(words, parts)]
+        if min(scores, default=0) > 0:
+            scored[action] = max(scored.get(action, 0), sum(scores) / len(scores))
+    ranked = sorted(scored.items(), key=lambda item: -item[1])
+    if not ranked or (len(ranked) > 1 and ranked[0][1] - ranked[1][1] < MIN_MARGIN):
+        return None
+    return ranked[0][0]
+

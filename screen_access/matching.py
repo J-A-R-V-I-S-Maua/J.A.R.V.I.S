@@ -69,6 +69,11 @@ def _similarity(word, other):
     return 0.0
 
 
+def word_similarity(word, other):
+    """Nota de 0 a 1 para duas palavras soarem iguais ("polar" e "colar" passam; "blood", não)."""
+    return _similarity(sound_key(word), sound_key(other))
+
+
 def _looks_like_command(token):
     if token in STOPWORDS:
         return True

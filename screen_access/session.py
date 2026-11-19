@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 import time
-from .commands import CANCEL, CONFIRM, FIELD_COMMANDS, action_command, normalized, parse_number, select_command
+from .commands import (CANCEL, CONFIRM, FIELD_COMMANDS, action_command, field_command, normalized, parse_number,
+                       select_command)
 from .matching import choose
 from .scroll import parse_scroll, ScrollOutcome
 
@@ -394,6 +395,9 @@ class ScreenSession:
         # O texto ditado preserva acentos, caixa e pontuação da transcrição final.
         dictation = re.match(r"^\s*digitar\b[\s,:;.!?]*(.*)$", text, re.IGNORECASE)
         show = phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"}
+        if not show and target is None and dictation is None and field_action is None:
+            # Último recurso: uma frase que soa como um comando de campo ("Polar texto" por "colar texto").
+            field_action = field_command(text) if command is None else None
         if not show and target is None and dictation is None and field_action is None:
             return False
         if command and not target:

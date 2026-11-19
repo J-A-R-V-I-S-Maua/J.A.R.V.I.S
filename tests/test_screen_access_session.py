@@ -405,5 +405,34 @@ class ClipboardSessionTest(unittest.TestCase):
         self.assertFalse(self.session.active)
 
 
+
+class SoundAlikeFieldCommandTest(unittest.TestCase):
+    setUp = SelectTextSessionTest.setUp
+
+    def test_frase_que_soa_como_comando_de_campo(self):
+        # Trocas reais do Whisper com as vozes do macOS.
+        from screen_access.commands import field_command
+
+        for phrase, action in (("Polar texto.", "paste_text"), ("Calar aqui.", "paste_text"),
+                               ("Deletor.", "clear_text"), ("Impar campo.", "clear_text")):
+            self.assertEqual(field_command(phrase), action, phrase)
+        for phrase in ("Blood.", "Comandos.", "Ode.", "previsão do tempo", "clicar", "Conte-se."):
+            self.assertIsNone(field_command(phrase), phrase)
+
+    def test_vira_o_comando_mas_ainda_pede_confirmacao(self):
+        self.assertTrue(self.session.handle("Polar texto."))
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("prepare_paste", self.snapshot.window))
+        self.session.receive(self.session.token, "prepare_paste", (self.snapshot, "bom dia"))
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+
+    def test_so_como_ultimo_recurso(self):
+        self.assertFalse(self.session.handle("Blood."))
+        self.session.handle("clique em polar")  # o clique por nome continua sendo clique
+        self.assertEqual(self.executor.submit.call_args.args[1], "scan")
+        self.session.cancel()
+        self.session.begin_capture()
+        self.session.handle("digitar polar texto")  # e o ditado continua literal
+        self.assertEqual(self.session.dictation_text, "polar texto")
+
 if __name__ == "__main__":
     unittest.main()
