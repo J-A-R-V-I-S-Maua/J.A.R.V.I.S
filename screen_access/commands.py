@@ -80,3 +80,20 @@ def parse_number(text):
     if value.isdigit():
         return int(value) if 1 <= int(value) <= 200 else None
     return NUMBERS.get(value)
+
+
+SELECT_VERB = r"(?:selecionar|selecione|seleciona)"
+
+
+def select_command(text):
+    """Seleção de texto no campo ativo: ("all"|"last_word"|"text", trecho) ou None.
+
+    Só formas explícitas: "selecionar X" sozinho continua sendo o clique no controle X.
+    """
+    phrase = normalized(text)
+    if re.fullmatch(SELECT_VERB + r" (?:tudo|todo o texto)", phrase):
+        return "all", None
+    if re.fullmatch(SELECT_VERB + r" (?:a )?ultima palavra", phrase):
+        return "last_word", None
+    match = re.fullmatch(SELECT_VERB + r" (?:a palavra|as palavras|o texto|o trecho) (.+)", phrase)
+    return ("text", match[1]) if match else None

@@ -476,3 +476,81 @@ class ScrollTest(unittest.TestCase):
         env.macos.focused_element = lambda pid: None
         targets = env.backend.prepare_scroll(env.backend.foreground())
         self.assertEqual(targets.snapshot.elements, ())
+
+
+class SelectTextTest(unittest.TestCase):
+    """Campo de texto dentro da janela de pasta, com a seleção guardada em unidades UTF-16."""
+
+    def setUp(self):
+        self.env = env = Environment(self, front="window")
+        env.roles["field"] = "AXTextField"
+        env.names["field"] = "Mensagem"
+        env.frames["field"] = (120, 140, 300, 24)
+        env.children["window"] = ("windowarea", "field")
+        env.attrs.update({("field", "AXEnabled"): True, ("field", "AXWindow"): "window"})
+        self.selection = None
+        self.accepts = True
+        macos = env.macos
+        macos.focused_element = lambda pid: "field"
+        macos.keyboard_pid = lambda: FINDER
+        macos.activate_application = Mock(return_value=True)
+        macos.same_element = lambda a, b: a is not None and a == b
+        macos.parent = lambda element: next((key for key, kids in env.children.items() if element in kids), None)
+        macos.set_attribute = Mock(return_value=0)
+        macos.selected_range = lambda element: self.selection
+        macos.select_range = Mock(side_effect=self.select)
+        macos.press_key = Mock()
+        macos.KEY_A, macos.COMMAND = 0, 1 << 20
+        self.window = env.backend.foreground()
+
+    def select(self, element, location, length):
+        if not self.accepts:
+            return -25205
+        self.selection = (location, length)
+        return 0
+
+    def run_selection(self, text, selection, cursor=None):
+        self.env.attrs[("field", "AXValue")] = text
+        self.selection = (len(text.encode("utf-16-le")) // 2 if cursor is None else cursor, 0)
+        snapshot = self.env.backend.prepare_dictation(self.window)
+        return self.env.backend.select_text(snapshot, selection)
+
+    def selected(self, text):
+        start, length = self.selection
+        units = text.encode("utf-16-le")
+        return units[start * 2:(start + length) * 2].decode("utf-16-le")
+
+    def test_trecho_falado_seleciona_o_mais_perto_antes_do_cursor(self):
+        text = "Olá Maria, olá de novo"
+        message = self.run_selection(text, ("text", "o la"))  # como o Whisper costuma entregar "olá"
+        self.assertEqual(self.selection, (11, 3))
+        self.assertEqual(message, "Selecionado: “olá”. Aparece 2 vezes; escolhi a mais perto antes do cursor.")
+
+    def test_tudo_e_ultima_palavra(self):
+        text = "Bom dia, Jarvis!"
+        self.assertEqual(self.run_selection(text, ("all", None)), "Todo o texto do campo foi selecionado.")
+        self.assertEqual(self.selected(text), text)
+        self.run_selection(text, ("last_word", None))
+        self.assertEqual(self.selected(text), "Jarvis")
+
+    def test_emoji_conta_duas_posicoes_para_o_macos(self):
+        text = "😀 olá"
+        self.run_selection(text, ("text", "ola"))
+        self.assertEqual(self.selection, (3, 3))
+        self.assertEqual(self.selected(text), "olá")
+
+    def test_trecho_ausente_ou_campo_vazio_nao_mexe_na_selecao(self):
+        with self.assertRaisesRegex(self.env.module.ScreenError, "Não encontrei “xyz”"):
+            self.run_selection("Bom dia", ("text", "xyz"))
+        with self.assertRaisesRegex(self.env.module.ScreenError, "vazio"):
+            self.run_selection("   ", ("all", None))
+        self.env.macos.select_range.assert_not_called()
+
+    def test_campo_que_recusa_a_selecao(self):
+        self.accepts = False
+        with self.assertRaisesRegex(self.env.module.ScreenError, "não deixa selecionar"):
+            self.run_selection("Bom dia", ("text", "dia"))
+        self.env.macos.press_key.assert_not_called()
+        # "Tudo" tem o atalho do sistema como reserva, no campo já validado.
+        self.run_selection("Bom dia", ("all", None))
+        self.env.macos.press_key.assert_called_once_with(0, 1 << 20)

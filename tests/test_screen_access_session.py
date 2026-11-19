@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 from screen_access.backend import Element, Snapshot, Window
-from screen_access.commands import action_command, number_name, parse_number
+from screen_access.commands import action_command, number_name, parse_number, select_command
 from screen_access.session import ActionState, ScreenSession
 
 
@@ -315,6 +315,48 @@ class MissionControlSessionTest(unittest.TestCase):
         self.session.receive(self.session.token, "error", "O Mission Control não abriu. Tente de novo.")
         self.assertFalse(self.session.active)
         self.assertEqual(self.views[-1].text, "O Mission Control não abriu. Tente de novo.")
+
+
+
+class SelectTextSessionTest(unittest.TestCase):
+    def setUp(self):
+        self.executor = Mock()
+        self.views = []
+        self.session = ScreenSession(self.executor, self.views.append)
+        self.snapshot = snapshot()
+        self.session.receive(0, "foreground", self.snapshot.window)
+        self.session.begin_capture()
+
+    def test_formas_explicitas_e_clique_por_nome_preservado(self):
+        self.assertEqual(select_command("Selecionar tudo."), ("all", None))
+        self.assertEqual(select_command("Selecione a última palavra"), ("last_word", None))
+        self.assertEqual(select_command("Selecionar a palavra o lá."), ("text", "o la"))
+        self.assertEqual(select_command("selecionar o texto bom dia"), ("text", "bom dia"))
+        self.assertIsNone(select_command("selecionar pesquisar"))
+        self.assertEqual(action_command("selecionar pesquisar"), ("activate", "pesquisar"))
+
+    def test_seleciona_sem_pedir_confirmacao(self):
+        self.assertTrue(self.session.handle("Selecionar a palavra olá"))
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("prepare_dictation", self.snapshot.window))
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("select_text", self.snapshot, ("text", "ola")))
+        self.assertEqual(self.session.state, ActionState.EXECUTING)
+        self.session.receive(self.session.token, "select_text", "Selecionado: “olá”.")
+        self.assertFalse(self.session.active)
+        self.assertEqual(self.views[-1].text, "Selecionado: “olá”.")
+
+    def test_selecionar_tudo_nao_vira_clique_no_controle_tudo(self):
+        self.session.handle("selecionar tudo")
+        self.assertEqual(self.executor.submit.call_args.args[1], "prepare_dictation")
+        self.assertEqual(self.session.pending_action, "select_text")
+
+    def test_erro_aparece_e_encerra(self):
+        self.session.handle("selecionar o texto xyz")
+        self.session.receive(self.session.token, "prepare_dictation", self.snapshot)
+        self.session.receive(self.session.token, "error", "Não encontrei “xyz” no campo.")
+        self.assertFalse(self.session.active)
+        self.assertIsNone(self.session.selection)
+        self.assertEqual(self.views[-1].text, "Não encontrei “xyz” no campo.")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from ApplicationServices import (
     AXUIElementIsAttributeSettable,
     AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
+    AXValueCreate,
     AXValueGetValue,
     kAXChildrenAttribute,
     kAXDescriptionAttribute,
@@ -23,6 +24,7 @@ from ApplicationServices import (
     kAXSizeAttribute,
     kAXTitleAttribute,
     kAXValueAttribute,
+    kAXValueCFRangeType,
     kAXValueCGPointType,
     kAXValueCGSizeType,
 )
@@ -304,6 +306,20 @@ def element_frame(element):
     if not (position_ok and size_ok):
         return None
     return (point.x, point.y, dimensions.width, dimensions.height)
+
+
+def selected_range(element):
+    """(início, tamanho) da seleção do campo, em unidades UTF-16; o cursor é uma seleção vazia."""
+    value = read_attribute(element, "AXSelectedTextRange")
+    if value is None:
+        return None
+    ok, selection = AXValueGetValue(value, kAXValueCFRangeType, None)
+    return tuple(selection) if ok else None
+
+
+def select_range(element, location, length):
+    """Seleciona o intervalo (em unidades UTF-16) do campo. Devolve o código de erro; 0 = aceito."""
+    return set_attribute(element, "AXSelectedTextRange", AXValueCreate(kAXValueCFRangeType, (location, length)))
 
 
 def intersect(a, b):

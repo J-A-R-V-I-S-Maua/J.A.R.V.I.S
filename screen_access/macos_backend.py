@@ -5,6 +5,7 @@ import uuid
 
 from . import macos, macos_shell
 from .backend import Backend, Element, ScreenError, Snapshot, Window
+from .matching import find_in_text, last_word
 from .permissions import has_accessibility_permission
 from .scroll import SCROLL_DURATIONS, SCROLL_FRAME_SECONDS, ScrollMixin, ScrollOutcome, ScrollTargets
 from ApplicationServices import AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue
@@ -13,6 +14,20 @@ DESKTOP_PREFIX = "desktop:"
 MISSION_CONTROL_PREFIX = "missioncontrol:"
 FIELD_NAME_LIMIT = 60
 MAX_ANCESTORS = 64  # nenhuma árvore real é tão funda; o limite só impede um laço sem fim
+
+
+def utf16_length(text):
+    return len(text.encode("utf-16-le")) // 2
+
+
+def from_utf16(text, offset):
+    """Posição em caracteres do Python para uma posição em unidades UTF-16 (emojis contam 2)."""
+    count = 0
+    for index, char in enumerate(text):
+        if count >= offset:
+            return index
+        count += 2 if ord(char) > 0xFFFF else 1
+    return len(text)
 
 
 def short_name(text):
@@ -342,6 +357,39 @@ class MacOSBackend(ScrollMixin, Backend):
         if cancelled() or not self._still_focused(snapshot, element):
             raise ScreenError("O foco mudou. A limpeza do campo foi interrompida.")
         macos.press_key(macos.KEY_DELETE)
+
+    def select_text(self, snapshot, selection, cancelled=lambda: False):
+        """Seleciona tudo, a última palavra ou um trecho falado do campo ativo, pela acessibilidade."""
+        kind, phrase = selection
+        element = self._focus_editable(snapshot, cancelled)
+        text = macos.read_attribute(element, "AXValue")
+        if not isinstance(text, str) or not text.strip():
+            raise ScreenError("O campo está vazio; não há texto para selecionar.")
+        current = macos.selected_range(element)
+        cursor = from_utf16(text, current[0]) if current else None
+        if kind == "all":
+            span, message = (0, len(text)), "Todo o texto do campo foi selecionado."
+        elif kind == "last_word":
+            span = last_word(text, cursor)
+            if span is None:
+                raise ScreenError("Não há palavra antes do cursor.")
+            message = f"Selecionado: “{text[span[0]:span[1]]}”."
+        else:
+            found = find_in_text(text, phrase, cursor)
+            if found is None:
+                raise ScreenError(f"Não encontrei “{phrase}” no campo.")
+            span = found[:2]
+            message = f"Selecionado: “{text[span[0]:span[1]]}”."
+            if found[2] > 1:
+                message += f" Aparece {found[2]} vezes; escolhi a mais perto antes do cursor."
+        if cancelled():
+            raise ScreenError("Seleção cancelada.")
+        location, length = utf16_length(text[:span[0]]), utf16_length(text[span[0]:span[1]])
+        if macos.select_range(element, location, length) != 0 or macos.selected_range(element) != (location, length):
+            if kind != "all":
+                raise ScreenError("Este campo não deixa selecionar texto pela acessibilidade.")
+            macos.press_key(macos.KEY_A, macos.COMMAND)  # selecionar tudo pelo teclado, no campo validado
+        return message
 
     # --- Rolagem ---------------------------------------------------------------------------
 

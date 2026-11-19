@@ -150,6 +150,9 @@ class Backend:
     def clear_text(self, snapshot, number=1, cancelled=lambda: False):
         raise ScreenError("Limpeza do campo ativo indisponível neste sistema.")
 
+    def select_text(self, snapshot, selection, cancelled=lambda: False):
+        raise ScreenError("Selecionar texto pela voz está disponível somente no macOS nesta versão.")
+
     def mission_control(self, opened, cancelled=lambda: False):
         raise ScreenError("Mostrar janelas está disponível somente no macOS nesta versão.")
 

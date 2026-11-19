@@ -206,6 +206,12 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   incluindo texto que já existia antes da última ditagem. Também aceita **“apagar tudo”**,
   **“limpar campo”**, “apaga tudo”, “limpa o campo” e “deleta”. Sem campo editável ativo,
   solicita que você selecione um. “Apagar tudo” é a forma que o reconhecimento erra menos.
+- **“Selecionar a palavra olá”** ou **“selecionar o texto bom dia”** (macOS): seleciona o
+  trecho no campo ativo, sem acentos nem maiúsculas fazendo diferença e tolerando os erros
+  comuns da transcrição (“o lá” por “olá”). Se ele aparecer mais de uma vez, fica o mais perto
+  antes do cursor, em geral o que acabou de ser ditado. Também há **“selecionar tudo”** e
+  **“selecionar a última palavra”**. Selecionar não altera o texto, então não pede confirmação.
+  “Selecionar [nome]” sozinho continua sendo o clique no controle com esse nome.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens

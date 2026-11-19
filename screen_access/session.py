@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 import time
-from .commands import CANCEL, CONFIRM, FIELD_COMMANDS, action_command, normalized, parse_number
+from .commands import CANCEL, CONFIRM, FIELD_COMMANDS, action_command, normalized, parse_number, select_command
 from .matching import choose
 from .scroll import parse_scroll, ScrollOutcome
 
@@ -56,6 +56,7 @@ class ScreenSession:
         self.dictation_text = None
         self.is_dictation = False
         self.pending_action = "activate"
+        self.selection = None  # ("all"|"last_word"|"text", trecho) enquanto o campo é procurado
         self.retry_count = 0
         self.deadline = None
         self._step = self.state
@@ -129,6 +130,7 @@ class ScreenSession:
         self.dictation_text = None
         self.is_dictation = False
         self.pending_action = "activate"
+        self.selection = None
         self._reset_scroll()
         self.view(text)
 
@@ -230,7 +232,13 @@ class ScreenSession:
                 self.select(self.pending_phrase)
         elif kind == "prepare_dictation":
             self.snapshot = data
-            if self.pending_action in ("press_enter", "clear_text"):
+            if self.pending_action == "select_text":
+                # Selecionar não altera o texto: vai direto, sem pedir confirmação.
+                self.state = ActionState.EXECUTING
+                self.token += 1
+                self.view("Selecionando…")
+                self.executor.submit(self.token, "select_text", data, self.selection)
+            elif self.pending_action in ("press_enter", "clear_text"):
                 self.selected = 1
                 self.state = ActionState.CONFIRMING
                 name = data.elements[0].name or "campo ativo"
@@ -247,6 +255,8 @@ class ScreenSession:
             self.cancel("Conteúdo do campo apagado.")
         elif kind == "press_enter":
             self.cancel("Enter enviado ao campo.")
+        elif kind == "select_text":
+            self.cancel(data)
         elif kind in ("activate", "open_item", "context_menu"):
             self.cancel("Pedido aceito pelo aplicativo.")
         elif kind == "mission_control":
@@ -366,6 +376,10 @@ class ScreenSession:
             return True  # Uma operação em andamento não aceita uma segunda ação.
         command = action_command(text)
         field_action = FIELD_COMMANDS.get(phrase)
+        selection = select_command(text)
+        if selection is not None:
+            # "Selecionar tudo" também casa com o clique ("selecionar" + controle "tudo"); o texto vence.
+            command, field_action = None, "select_text"
         target = command[1] if command else None
         # O texto ditado preserva acentos, caixa e pontuação da transcrição final.
         dictation = re.match(r"^\s*digitar\b[\s,:;.!?]*(.*)$", text, re.IGNORECASE)
@@ -386,6 +400,7 @@ class ScreenSession:
         self.dictation_text = dictation.group(1).strip() or None if dictation else None
         self.pending_phrase = None if show else target
         self.pending_action = field_action or (command[0] if command else "activate")
+        self.selection = selection
         self.token += 1
         if self.is_dictation or field_action:
             self.view("Identificando campo de texto ativo…")
