@@ -176,8 +176,6 @@ class MicrophoneSelectionTest(unittest.TestCase):
                 select_input_device(self.audio)
 
 
-
-
 class WhisperPromptTest(unittest.TestCase):
     """O serviço realtime roda no Docker; aqui as bibliotecas dele viram dublês."""
 
@@ -218,6 +216,27 @@ class WhisperPromptTest(unittest.TestCase):
         self.assertEqual(self.load({"WHISPER_INITIAL_PROMPT": "Comandos: abra, feche."})
                          .transcription_options()["initial_prompt"], "Comandos: abra, feche.")
 
+
+class WakeWordModelTest(unittest.TestCase):
+    def test_supressor_de_ruido_so_liga_com_o_pacote_instalado(self):
+        # Ligado sem o speexdsp-ns (Mac e Windows), o openWakeWord falhava e a voz não iniciava.
+        from wakeword import model_loader
+
+        paths = {
+            "hey_jarvis": "hj.onnx",
+            "melspectrogram": "mel.onnx",
+            "embedding_model": "emb.onnx",
+        }
+        for spec, expected in ((None, False), (object(), True)):
+            with self.subTest(instalado=expected), patch.object(
+                model_loader, "ensure_models", return_value=paths
+            ), patch.object(model_loader, "find_spec", return_value=spec), patch.object(
+                model_loader, "Model"
+            ) as model:
+                model_loader.create_model()
+                self.assertIs(
+                    model.call_args.kwargs["enable_speex_noise_suppression"], expected
+                )
 
 if __name__ == "__main__":
     unittest.main()
