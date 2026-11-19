@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-
+from importlib.util import find_spec
 import openwakeword
 from openwakeword.model import Model
 import requests
@@ -65,13 +65,21 @@ def ensure_models(cancelled=lambda: False):
     return paths
 
 
+def noise_suppression_available():
+    """O supressor de ruído do openWakeWord depende do pacote speexdsp-ns, que só existe no Linux.
+
+    Sem ele, ligar a supressão derruba o carregamento da wake word; então ela fica desligada.
+    """
+    return find_spec("speexdsp_ns") is not None
+
+
 def create_model(cancelled=lambda: False):
     paths = ensure_models(cancelled)
     check_cancelled(cancelled)
     return Model(
         wakeword_models=[paths["hey_jarvis"]],
         inference_framework="onnx",
-        enable_speex_noise_suppression=True,
+        enable_speex_noise_suppression=noise_suppression_available(),
         melspec_model_path=paths["melspectrogram"],
         embedding_model_path=paths["embedding_model"],
     )
