@@ -191,15 +191,6 @@ class CircleButton(QPushButton):
             painter.drawEllipse(arc)
             painter.setPen(QPen(QColor(ink), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawArc(arc, round(-self.phase * 40 * 16) % 5760, 100 * 16)
-        elif mode == "listening" and self.countdown is not None:
-            # Os segundos que faltam, grandes, no lugar da onda.
-            font = painter.font()
-            font.setPixelSize(19)
-            font.setBold(True)
-            painter.setFont(font)
-            painter.setPen(QColor(ink))
-            painter.drawText(QRectF(center.x() - 20, center.y() - 20, 40, 40), Qt.AlignmentFlag.AlignCenter,
-                             str(self.seconds_left()))
         else:
             draw_wave(painter, center, self.phase, mode == "listening", ink, scale=0.85)
 
@@ -210,19 +201,15 @@ class CircleButton(QPushButton):
         began, seconds = self.countdown
         return max(0.0, min(1.0, 1 - (time.monotonic() - began) / seconds))
 
-    def seconds_left(self):
-        return math.ceil(self.countdown[1] * self.remaining()) if self.countdown else 0
-
     def _paint_countdown(self, painter, theme, center):
-        # Modo contínuo: um anel que esvazia no sentido horário até o fim da espera.
-        ring = QRectF(center.x() - 23, center.y() - 23, 46, 46)
-        track = QColor(theme["accent"])
-        track.setAlpha(55)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(track, 4))
-        painter.drawEllipse(ring)
-        painter.setPen(QPen(QColor(theme["accent"]), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawArc(ring, 90 * 16, -round(360 * 16 * self.remaining()))
+        # Modo contínuo: um contorno em volta do botão que vai sumindo, a partir do topo, até o
+        # fim da espera. Quando o tempo acaba não sobra nada dele.
+        remaining = self.remaining()
+        if remaining > 0:
+            ring = QRectF(center.x() - 23.3, center.y() - 23.3, 46.6, 46.6)  # 2 px de folga do botão
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(theme["accent"]), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+            painter.drawArc(ring, 90 * 16, -round(360 * 16 * remaining))
         painter.setPen(Qt.PenStyle.NoPen)
 
     def _paint_tool(self, painter, theme, center):
