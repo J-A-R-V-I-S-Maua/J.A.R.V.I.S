@@ -2,8 +2,8 @@
 
 import math
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QVBoxLayout, QLabel, QTextEdit, QMenu, QPushButton, QSystemTrayIcon, QWidget,
 )
@@ -44,15 +44,35 @@ class TranscriptView(QTextEdit):
         super().mouseReleaseEvent(event)
 
 
-def draw_wave(painter, center, phase=0.0, animated=False):
-    painter.setPen(QPen(QColor("#151515"), 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-    heights = (4, 8, 13, 20, 29, 38, 29, 20, 13, 8, 4)
-    for index, height in enumerate(heights):
+# Cores da barra: as mesmas da janela de configurações, em versão clara, escura e de alto contraste.
+# "#aarrggbb" quando a cor é translúcida.
+THEMES = {
+    "light": dict(surface="#f0f9fafc", border="#1f000000", text="#1d2330", muted="#596273",
+                  accent="#006fcd", accent_soft="#e3eefb", on_accent="#ffffff", danger="#c62f3e",
+                  danger_soft="#fde8ea", neutral="#eceef2", hover="#12000000", pressed="#24000000", line=1.0),
+    "dark": dict(surface="#eb1d2027", border="#24ffffff", text="#f2f4f8", muted="#a7b0be",
+                 accent="#3d9bff", accent_soft="#333d9bff", on_accent="#ffffff", danger="#ff6b78",
+                 danger_soft="#33ff6b78", neutral="#1fffffff", hover="#17ffffff", pressed="#29ffffff", line=1.0),
+    "contrast": dict(surface="#ffffff", border="#000000", text="#000000", muted="#000000",
+                     accent="#000000", accent_soft="#ffffff", on_accent="#ffffff", danger="#a00000",
+                     danger_soft="#ffffff", neutral="#ffffff", hover="#1f000000", pressed="#33000000", line=2.0),
+}
+WAVE = (6, 12, 19, 25, 19, 12, 6)
+
+
+def system_is_dark():
+    return QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+
+
+def draw_wave(painter, center, phase=0.0, animated=False, color="#151515", scale=1.0):
+    painter.setPen(QPen(QColor(color), 2.4 * scale, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+    for index, height in enumerate(WAVE):
+        height *= scale
         if animated:
-            height *= 0.65 + 0.35 * math.sin(phase + index * 0.55)
-        x = center.x() + (index - 5) * 3
-        painter.drawLine(QPoint(round(x), round(center.y() - height / 2)),
-                         QPoint(round(x), round(center.y() + height / 2)))
+            height *= 0.5 + 0.5 * abs(math.sin(phase + index * 0.7))
+        x = center.x() + (index - 3) * 4 * scale
+        half = max(height, 2.4 * scale) / 2
+        painter.drawLine(QPointF(x, center.y() - half), QPointF(x, center.y() + half))
 
 
 def make_icon():
@@ -61,29 +81,43 @@ def make_icon():
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#cccccc"))
+    painter.setBrush(QColor(THEMES["light"]["accent"]))
     painter.drawEllipse(QRectF(2, 2, 60, 60))
-    draw_wave(painter, QPoint(32, 32))
+    draw_wave(painter, QPointF(32, 32), color="#ffffff", scale=1.5)
     painter.end()
     return QIcon(pixmap)
 
 
 class CircleButton(QPushButton):
+    """Botão redondo desenhado à mão. O de voz muda de cor e de animação conforme o estado."""
+
+    ANIMATED = ("listening", "processing", "preparing")
+
     def __init__(self, kind, parent=None):
         super().__init__(parent)
         self.kind = kind
         self.phase = 0.0
-        self.listening = False
-        self.setFixedSize(50, 50)
+        self.mode = "idle"  # idle, listening, processing, preparing, error
+        size = 50 if kind == "voice" else 38
+        self.setFixedSize(size, size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.animation = QTimer(self)
         self.animation.setInterval(33)
         self.animation.timeout.connect(self._tick)
 
+    @property
+    def listening(self):
+        return self.mode == "listening"
+
     def set_listening(self, listening):
-        self.listening = listening
-        if listening:
+        self.set_mode("listening" if listening else "idle")
+
+    def set_mode(self, mode):
+        if mode == self.mode:
+            return
+        self.mode = mode
+        if mode in self.ANIMATED:
             self.animation.start()
         else:
             self.animation.stop()
@@ -93,6 +127,10 @@ class CircleButton(QPushButton):
     def _tick(self):
         self.phase += 0.18
         self.update()
+
+    def theme(self):
+        parent = self.parent()
+        return parent.theme() if hasattr(parent, "theme") else THEMES["light"]
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -105,29 +143,74 @@ class CircleButton(QPushButton):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        gradient = QLinearGradient(0, 0, 0, 50)
-        gradient.setColorAt(0, QColor("#dddddd" if self.underMouse() else "#c6c6c6"))
-        gradient.setColorAt(1, QColor("#aaaaaa" if self.isDown() else "#d0d0d0"))
-        painter.setBrush(gradient)
-        painter.setPen(QPen(QColor("#eeeeee"), 0.8))
-        painter.drawEllipse(QRectF(1, 1, 48, 48))
+        theme = self.theme()
+        center = QRectF(self.rect()).center()
         if self.kind == "voice":
-            draw_wave(painter, QPoint(25, 25), self.phase, self.listening)
-        elif self.kind == "settings":
-            painter.setPen(QPen(QColor("#111111"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            for y, knob_x in ((18, 22), (25, 29), (32, 23)):
-                painter.drawLine(16, y, knob_x - 3, y)
-                painter.drawLine(knob_x + 3, y, 34, y)
-                painter.drawEllipse(QRectF(knob_x - 2.5, y - 2.5, 5, 5))
+            self._paint_voice(painter, theme, center)
         else:
-            painter.setPen(QPen(QColor("#111111"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            painter.drawLine(17, 17, 33, 33)
-            painter.drawLine(33, 17, 17, 33)
+            self._paint_tool(painter, theme, center)
         if self.hasFocus():
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor("#005ea8"), 2))
-            painter.drawEllipse(QRectF(3, 3, 44, 44))
+            painter.setPen(QPen(QColor(theme["accent"]), 2))
+            painter.drawEllipse(center, self.width() / 2 - 1.5, self.height() / 2 - 1.5)
+
+    def _paint_voice(self, painter, theme, center):
+        mode = self.mode if self.isEnabled() or self.mode == "preparing" else "disabled"
+        fill, ink = {
+            "listening": ("accent", "on_accent"), "processing": ("accent", "on_accent"),
+            "error": ("danger_soft", "danger"), "preparing": ("neutral", "muted"),
+            "disabled": ("neutral", "muted"),
+        }.get(mode, ("accent_soft", "accent"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        if mode == "listening":
+            # Halo que pulsa enquanto ouve: dá para ver de longe que o Jarvis está escutando.
+            pulse = (math.sin(self.phase * 0.7) + 1) / 2
+            halo = QColor(theme["accent"])
+            halo.setAlpha(round(35 + 55 * (1 - pulse)))
+            painter.setBrush(halo)
+            painter.drawEllipse(center, 20 + 4.5 * pulse, 20 + 4.5 * pulse)
+        painter.setBrush(QColor(theme[fill]))
+        if theme is THEMES["contrast"]:
+            painter.setPen(QPen(QColor("#000000"), 2))
+        painter.drawEllipse(center, 20, 20)
+        if mode != "disabled" and (self.underMouse() or self.isDown()):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(theme["pressed" if self.isDown() else "hover"]))
+            painter.drawEllipse(center, 20, 20)
+        ink = theme[ink] if theme is not THEMES["contrast"] or fill in ("accent", "danger_soft") else "#000000"
+        if mode in ("processing", "preparing"):
+            track = QColor(ink)
+            track.setAlpha(70)
+            arc = QRectF(center.x() - 9, center.y() - 9, 18, 18)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(track, 2.4))
+            painter.drawEllipse(arc)
+            painter.setPen(QPen(QColor(ink), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(arc, round(-self.phase * 40 * 16) % 5760, 100 * 16)
+        else:
+            draw_wave(painter, center, self.phase, mode == "listening", ink, scale=0.85)
+
+    def _paint_tool(self, painter, theme, center):
+        contrast = theme is THEMES["contrast"]
+        if self.underMouse() or self.isDown() or contrast:
+            painter.setPen(QPen(QColor("#000000"), 1.5) if contrast else Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(theme["pressed" if self.isDown() else "hover"])
+                             if self.underMouse() or self.isDown() else Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(center, self.width() / 2 - 2, self.height() / 2 - 2)
+        ink = theme["danger"] if self.kind == "close" and self.underMouse() else theme["muted"]
+        if not self.isEnabled():
+            ink = theme["border"]
+        painter.setPen(QPen(QColor(ink), 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        x, y = center.x(), center.y()
+        if self.kind == "settings":
+            for dy, knob in ((-5.5, -3.5), (0, 3.5), (5.5, -1.5)):
+                painter.drawLine(QPointF(x - 8, y + dy), QPointF(x + knob - 2.6, y + dy))
+                painter.drawLine(QPointF(x + knob + 2.6, y + dy), QPointF(x + 8, y + dy))
+                painter.drawEllipse(QPointF(x + knob, y + dy), 2.3, 2.3)
+        else:
+            painter.drawLine(QPointF(x - 5.5, y - 5.5), QPointF(x + 5.5, y + 5.5))
+            painter.drawLine(QPointF(x + 5.5, y - 5.5), QPointF(x - 5.5, y + 5.5))
 
 
 class Speakbar(QWidget):
@@ -162,26 +245,29 @@ class Speakbar(QWidget):
         self.guidance.setWordWrap(True)
         self.guidance.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.guidance.setAccessibleName("Orientação da interação")
-        self.guidance.setStyleSheet("QLabel { color: #111111; background: transparent; }")
-        font = QFont("Segoe UI")
+        self.dark = None  # None segue o sistema; True/False força (usado nos testes de imagem)
+        # A fonte do próprio sistema: Segoe UI no Windows, SF no macOS, a do tema no Linux.
+        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
         font.setPixelSize(18)
-        self.message.setFont(font)
         self.guidance.setFont(font)
-        self.message.setStyleSheet("QTextEdit { color: #111111; background: transparent; border: 0; } QTextEdit:focus { border-bottom: 1px solid #005ea8; }")
+        font.setWeight(QFont.Weight.Medium)
+        self.message.setFont(font)
         self.message.setMinimumWidth(0)
         self.message.viewport().installEventFilter(self)
         self.message.drag_started.connect(self._start_drag)
         self.message.drag_moved.connect(self._move_drag)
         self.message.drag_finished.connect(self._end_drag)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 5, 12, 5)
+        layout.setContentsMargins(5, 5, 9, 5)
         layout.setSpacing(12)
         layout.addWidget(self.voice)
         content = QVBoxLayout()
         content.setSpacing(2)
         content.setContentsMargins(0, 0, 0, 0)
+        content.addStretch(1)  # o texto fica no meio da altura, alinhado aos botões
         content.addWidget(self.message)
         content.addWidget(self.guidance)
+        content.addStretch(1)
         layout.addLayout(content, 1)
         layout.addWidget(self.settings_button)
         layout.addWidget(self.close_button)
@@ -222,6 +308,7 @@ class Speakbar(QWidget):
         self.move(area.x() + (area.width() - self.width()) // 2,
                   max(area.top(), area.bottom() + 1 - self.height() - 24))
         self.apply_appearance(self.preferences.effective)
+        QGuiApplication.styleHints().colorSchemeChanged.connect(lambda _: self._apply_theme())
         values = self.preferences.effective
         if values["remember_position"] and values["position"]:
             self.keep_on_screen(QPoint(*values["position"]))
@@ -262,14 +349,30 @@ class Speakbar(QWidget):
 
     def apply_appearance(self, values):
         self.high_contrast = values["high_contrast"]
-        font = self.message.font()
-        font.setPixelSize(values["text_size"])
-        self.message.setFont(font)
-        self.guidance.setFont(font)
+        for label in (self.message, self.guidance):
+            font = label.font()
+            font.setPixelSize(values["text_size"])
+            label.setFont(font)
         if self.overlay:
             self.overlay.number_size = values["number_size"]
             self.overlay.high_contrast = values["high_contrast"]
+        self._apply_theme()
         self._fit_message()
+
+    def theme(self):
+        if self.high_contrast:
+            return THEMES["contrast"]
+        return THEMES["dark" if (system_is_dark() if self.dark is None else self.dark) else "light"]
+
+    def _apply_theme(self):
+        theme = self.theme()
+        self.message.setStyleSheet(
+            f"QTextEdit {{ color: {theme['text']}; background: transparent; border: 0;"
+            f" selection-background-color: {theme['accent']}; selection-color: #ffffff; }}"
+            f" QTextEdit:focus {{ border-bottom: 1px solid {theme['accent']}; }}")
+        self.guidance.setStyleSheet(f"QLabel {{ color: {theme['muted']}; background: transparent; }}")
+        for button in (self.voice, self.settings_button, self.close_button):
+            button.update()
         self.update()
 
     def _connect_screen(self, screen):
@@ -303,7 +406,9 @@ class Speakbar(QWidget):
         self.voice.setEnabled(event.state not in (State.PREPARING, State.CANCELLING, State.STOPPING, State.STOPPED))
         if self.controller.settings_open:
             self.voice.setEnabled(False)
-        self.voice.set_listening(event.state is State.LISTENING)
+        self.voice.set_mode({State.LISTENING: "listening", State.PROCESSING: "processing",
+                             State.PREPARING: "preparing", State.ERROR: "error"}.get(event.state, "idle"))
+        self.update()  # a borda da barra acende enquanto ouve
 
     def _update_message(self):
         presentation = getattr(self.controller, "presentation", None)
@@ -325,12 +430,14 @@ class Speakbar(QWidget):
         self._resizing_text = True
         try:
             bottom = self.y() + self.height()
-            width = max(40, self.width() - 50 * 3 - 12 * 3 - 20)
+            buttons = self.voice.width() + self.settings_button.width() + self.close_button.width()
+            width = max(40, self.width() - buttons - 12 * 3 - 14)
             metrics = self.message.fontMetrics()
             text_height = metrics.boundingRect(QRect(0, 0, width, 10000),
                 Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere,
                 self.message.toPlainText()).height()
-            lines = min(3, max(1, math.ceil(text_height / metrics.lineSpacing())))
+            # A altura do texto passa um ou dois pixels da entrelinha; isso não é uma linha a mais.
+            lines = min(3, max(1, math.ceil(text_height / metrics.lineSpacing() - 0.25)))
             guidance_height = self.guidance.heightForWidth(width) + 4 if self.guidance.text() else 0
             height = max(60, lines * metrics.lineSpacing() + 16 + guidance_height)
             screen = QApplication.screenAt(self.pos() + self.rect().center()) or QApplication.primaryScreen()
@@ -355,17 +462,14 @@ class Speakbar(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0, QColor(160, 160, 160, 238))
-        gradient.setColorAt(0.5, QColor(151, 151, 151, 238))
-        gradient.setColorAt(1, QColor(174, 174, 174, 238))
-        if self.high_contrast:
-            gradient.setColorAt(0, QColor("white"))
-            gradient.setColorAt(0.5, QColor("white"))
-            gradient.setColorAt(1, QColor("white"))
-        painter.setBrush(gradient)
-        painter.setPen(QPen(QColor(226, 226, 226, 220), 0.8))
-        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 30, 30)
+        theme = self.theme()
+        listening = self.voice.mode == "listening"
+        width = theme["line"] + (0.8 if listening else 0)
+        rect = QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2)
+        radius = min(30, rect.height() / 2)
+        painter.setBrush(QColor(theme["surface"]))
+        painter.setPen(QPen(QColor(theme["accent" if listening else "border"]), width))
+        painter.drawRoundedRect(rect, radius, radius)
 
     def keep_on_screen(self, position=None, screen=None):
         position = position if isinstance(position, QPoint) else self.pos()

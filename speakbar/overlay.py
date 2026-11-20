@@ -130,26 +130,31 @@ class MarkerWindow(QWidget):
         font.setBold(True)
         painter.setFont(font)
         occupied = []
+        accent = QColor("#000000" if self.high_contrast else "#006fcd")
         for number, frame in self.markers:
             x, y, width, height = frame
-            outline = QColor("#111111" if self.high_contrast else "#005ea8")
+            outline = QColor(accent)
             if not self.high_contrast:
-                outline.setAlpha(190)
-            painter.setPen(QPen(outline, 1.25))
+                outline.setAlpha(170)
+            painter.setPen(QPen(outline, 2 if self.high_contrast else 1.5))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(x, y, width, height), 3, 3)
-            badge_width = max(22, painter.fontMetrics().horizontalAdvance(str(number)) + 8)
-            badge_height = max(18, painter.fontMetrics().height() + 4)
-            badge = QRectF(max(0, min(x, self.width()-badge_width)), max(0, min(y, self.height()-badge_height)), badge_width, badge_height)
+            painter.drawRoundedRect(QRectF(x, y, width, height), 4, 4)
+            metrics = painter.fontMetrics()
+            badge_height = metrics.height() + 6
+            badge_width = max(badge_height, metrics.horizontalAdvance(str(number)) + 12)
+            badge = QRectF(max(1, min(x - 3, self.width() - badge_width - 1)),
+                           max(1, min(y - 3, self.height() - badge_height - 1)), badge_width, badge_height)
             while any(badge.intersects(previous) for previous in occupied) and badge.bottom()+badge_height+1 < self.height():
                 badge.translate(0, badge_height+1)
             occupied.append(QRectF(badge))
+            radius = badge_height / 2
+            # Etiqueta sólida com borda branca e sombra: legível em fundo claro, escuro ou colorido.
             painter.setPen(Qt.PenStyle.NoPen)
-            background = QColor("black" if self.high_contrast else "#005ea8")
-            if not self.high_contrast:
-                background.setAlpha(160)
-            painter.setBrush(background)
-            painter.drawRoundedRect(badge, 4, 4)
+            painter.setBrush(QColor(0, 0, 0, 70))
+            painter.drawRoundedRect(badge.translated(0, 1.5), radius, radius)
+            painter.setPen(QPen(QColor("white"), 1.5))
+            painter.setBrush(accent)
+            painter.drawRoundedRect(badge, radius, radius)
             painter.setPen(QColor("white"))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(number))
 
