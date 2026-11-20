@@ -15,6 +15,19 @@ SETTINGS_COMMANDS = {normalize(text) for text in (
     "abra as configurações do Jarvis", "abrir configurações do Jarvis", "abrir as configurações do Jarvis",
 )}
 HELP_COMMANDS = {"ajuda", "o que posso dizer", "quais comandos"}
+# Encerram o modo contínuo em silêncio ("pronto", "obrigado, Jarvis", "por enquanto é só").
+END_WORDS = {"pronto", "obrigado", "obrigada", "valeu", "parar", "pare", "chega", "tchau", "encerrar", "sair"}
+END_FILLERS = {"ok", "jarvis", "entao", "muito", "pode", "por", "favor", "ta", "bom", "e"}
+END_PHRASES = {"so isso", "e so isso", "isso e tudo", "por enquanto e so", "por enquanto so", "era so isso"}
+
+
+def ends_conversation(text):
+    phrase = normalize(text)
+    if phrase in END_PHRASES:
+        return True
+    words = [word for word in phrase.split() if word not in END_FILLERS]
+    return bool(words) and all(word in END_WORDS for word in words)
+
 HELP = {
     "general": "Diga mostrar números, mostrar janelas, clique em [nome], digitar [texto], selecionar a palavra [texto], copiar texto, colar texto, role para baixo, role para cima, Enter, limpar campo, nova aba, fechar aba, próxima aba, voltar página, executar atalho ou abrir configurações.",
     "choosing": "Diga um dos números exibidos, confirmar após escolher, ou cancelar.",
@@ -82,7 +95,7 @@ def settings_command(text):
         return "close", None
     for prefix, enabled in (("ativar ", True), ("desativar ", False)):
         for label, key in (("alto contraste", "high_contrast"), ("lembrar posicao", "remember_position"),
-                           ("modo continuo", "continuous_mode")):
+                           ("modo continuo", "continuous_mode"), ("som do modo continuo", "continuous_sound")):
             if phrase == prefix + label:
                 return key, enabled
     prefixes = {"tamanho do texto": "text_size", "tamanho dos numeros": "number_size",

@@ -1,6 +1,7 @@
 """Apresentação Qt da speakbar; ícones desenhados localmente."""
 
 import math
+import time
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QPainter, QPen, QPixmap
@@ -98,6 +99,7 @@ class CircleButton(QPushButton):
         self.kind = kind
         self.phase = 0.0
         self.mode = "idle"  # idle, listening, processing, preparing, error
+        self.countdown = None  # (início, segundos): a espera do modo contínuo, desenhada em volta
         size = 50 if kind == "voice" else 38
         self.setFixedSize(size, size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -162,7 +164,9 @@ class CircleButton(QPushButton):
             "disabled": ("neutral", "muted"),
         }.get(mode, ("accent_soft", "accent"))
         painter.setPen(Qt.PenStyle.NoPen)
-        if mode == "listening":
+        if mode == "listening" and self.countdown is not None:
+            self._paint_countdown(painter, theme, center)
+        elif mode == "listening":
             # Halo que pulsa enquanto ouve: dá para ver de longe que o Jarvis está escutando.
             pulse = (math.sin(self.phase * 0.7) + 1) / 2
             halo = QColor(theme["accent"])
@@ -189,6 +193,25 @@ class CircleButton(QPushButton):
             painter.drawArc(arc, round(-self.phase * 40 * 16) % 5760, 100 * 16)
         else:
             draw_wave(painter, center, self.phase, mode == "listening", ink, scale=0.85)
+
+    def remaining(self):
+        """Fração da espera do modo contínuo que ainda resta (1 = cheia, 0 = acabou)."""
+        if self.countdown is None:
+            return 0.0
+        began, seconds = self.countdown
+        return max(0.0, min(1.0, 1 - (time.monotonic() - began) / seconds))
+
+    def _paint_countdown(self, painter, theme, center):
+        # Modo contínuo: um anel que esvazia no sentido horário até o fim da espera.
+        ring = QRectF(center.x() - 23, center.y() - 23, 46, 46)
+        track = QColor(theme["accent"])
+        track.setAlpha(55)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(track, 3))
+        painter.drawEllipse(ring)
+        painter.setPen(QPen(QColor(theme["accent"]), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(ring, 90 * 16, -round(360 * 16 * self.remaining()))
+        painter.setPen(Qt.PenStyle.NoPen)
 
     def _paint_tool(self, painter, theme, center):
         contrast = theme is THEMES["contrast"]
@@ -406,8 +429,10 @@ class Speakbar(QWidget):
         self.voice.setEnabled(event.state not in (State.PREPARING, State.CANCELLING, State.STOPPING, State.STOPPED))
         if self.controller.settings_open:
             self.voice.setEnabled(False)
+        self.voice.countdown = getattr(self.controller, "follow_up_countdown", None)
         self.voice.set_mode({State.LISTENING: "listening", State.PROCESSING: "processing",
                              State.PREPARING: "preparing", State.ERROR: "error"}.get(event.state, "idle"))
+        self.voice.update()  # a contagem pode sumir sem o modo mudar (a pessoa começou a falar)
         self.update()  # a borda da barra acende enquanto ouve
 
     def _update_message(self):

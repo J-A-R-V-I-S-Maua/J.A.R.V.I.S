@@ -126,9 +126,9 @@ class SettingsWindow(QDialog):
                 self._voice_notify(f"Seção {self.navigation.currentItem().text()}. Alterações ainda não salvas.")
                 return
             controls = dict(self.voice_controls, text_size=self.text_size, number_size=self.number_size)
-            if key in ("high_contrast", "remember_position", "continuous_mode"):
-                dict(high_contrast=self.contrast, remember_position=self.remember,
-                     continuous_mode=self.continuous)[key].setChecked(value)
+            if key in ("high_contrast", "remember_position", "continuous_mode", "continuous_sound"):
+                dict(high_contrast=self.contrast, remember_position=self.remember, continuous_mode=self.continuous,
+                     continuous_sound=self.continuous_sound)[key].setChecked(value)
             else:
                 widget = controls[key]
                 if not widget.minimum() <= value <= widget.maximum() or (isinstance(widget, QSpinBox) and value != int(value)):
@@ -137,7 +137,8 @@ class SettingsWindow(QDialog):
             labels = dict(high_contrast="Alto contraste", remember_position="Lembrar posição", text_size="Tamanho do texto",
                           number_size="Tamanho dos números", silence_seconds="Tempo de silêncio", start_timeout="Tempo para começar a falar",
                           max_seconds="Duração máxima", detection_threshold="Limiar de ativação",
-                          continuous_mode="Modo contínuo", continuous_seconds="Tempo do modo contínuo")
+                          continuous_mode="Modo contínuo", continuous_seconds="Tempo do modo contínuo",
+                          continuous_sound="Som do modo contínuo")
             display = ("ativado" if value else "desativado") if isinstance(value, bool) else f"{value:g}".replace(".", ",")
             self._voice_notify(f"{labels[key]}: {display} no rascunho. Diga salvar configurações para gravar ou fechar configurações para descartar.")
         except ValueError as exc:
@@ -274,6 +275,8 @@ class SettingsWindow(QDialog):
         spin.setSingleStep(1)
         form.addRow("Tempo do modo contínuo (s)", spin)
         self.voice_controls["continuous_seconds"] = spin
+        self.continuous_sound = QCheckBox("Som ao abrir e ao encerrar a escuta do modo contínuo")
+        form.addRow(self.continuous_sound)
         layout.addLayout(form)
         label = QLabel("Limiar menor facilita a ativação, mas pode causar mais chamadas acidentais.\nSalve a seleção antes de testar outro microfone.")
         label.setWordWrap(True)
@@ -353,6 +356,7 @@ class SettingsWindow(QDialog):
         self.contrast.setChecked(values["high_contrast"])
         self.remember.setChecked(values["remember_position"])
         self.continuous.setChecked(values["continuous_mode"])
+        self.continuous_sound.setChecked(values["continuous_sound"])
         self.depth.setValue(values["max_depth"])
         self.limit.setValue(values["max_elements"])
 
@@ -515,6 +519,7 @@ class SettingsWindow(QDialog):
             values.update(microphone=self.microphone.currentData(), text_size=self.text_size.value(),
                           number_size=self.number_size.value(), high_contrast=self.contrast.isChecked(),
                           remember_position=self.remember.isChecked(), continuous_mode=self.continuous.isChecked(),
+                          continuous_sound=self.continuous_sound.isChecked(),
                           max_depth=self.depth.value(), max_elements=self.limit.value())
             validate_preferences(values)
             overrides = {} if self.restoring else dict(self.store.overrides)

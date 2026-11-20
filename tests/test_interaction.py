@@ -49,6 +49,7 @@ class ControllerFixture:
         self.service.capture_ready = True
         self.controller.thread = Mock()
         self.controller.thread.service = self.service
+        self.controller.play_cue = Mock()  # os testes não tocam som
 
     def tearDown(self):
         self.controller.shutdown()
@@ -301,7 +302,65 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         self.controller.toggle()
         self.assertFalse(self.controller._follow_up)
 
+    def listen_again(self):
+        self.finish_command()
+        self.controller.play_cue.reset_mock()
+        self.event(State.LISTENING)
+
+    def test_contagem_e_som_quando_a_escuta_abre(self):
+        self.listen_again()
+        began, seconds = self.controller.follow_up_countdown
+        self.assertEqual(seconds, 6.0)
+        self.controller.play_cue.assert_called_once_with("open")
+        self.assertIn("diga pronto para encerrar", self.controller.presentation.guidance)
+
+    def test_a_contagem_some_quando_a_fala_comeca(self):
+        self.listen_again()
+        changed = Mock()
+        self.controller.state_changed.connect(changed)
+        self.controller.speech_started.emit()
+        self.assertIsNone(self.controller.follow_up_countdown)
+        changed.assert_called()
+
+    def test_silencio_toca_o_som_de_encerramento(self):
+        self.listen_again()
+        self.event(State.ERROR, reason=Reason.NO_SPEECH)
+        self.controller.play_cue.assert_called_with("close")
+        self.assertIsNone(self.controller.follow_up_countdown)
+
+    def test_pronto_e_obrigado_encerram_em_silencio(self):
+        for phrase in ("Pronto.", "Obrigado, Jarvis!", "por enquanto é só", "parar"):
+            with self.subTest(phrase=phrase):
+                self.listen_again()
+                submits = self.controller.screen.executor.submit.call_count
+                with patch.object(self.service, "request_capture", return_value=True) as capture:
+                    self.event(State.RESULT, phrase)
+                capture.assert_not_called()
+                self.assertEqual(self.controller.screen.executor.submit.call_count, submits)
+                self.assertEqual(self.controller.text, "Modo contínuo encerrado. Diga Hey Jarvis quando precisar.")
+                self.controller.play_cue.assert_called_with("close")
+                self.assertFalse(self.controller._follow_up)
+
+    def test_fora_do_modo_continuo_pronto_nao_e_especial(self):
+        self.event(State.LISTENING)
+        self.assertIsNone(self.controller.follow_up_countdown)
+        self.controller.play_cue.assert_not_called()
+        self.event(State.RESULT, "pronto")
+        self.assertNotIn("Modo contínuo encerrado", self.controller.text)
+
+    def test_frase_solta_tambem_toca_o_encerramento(self):
+        self.listen_again()
+        self.event(State.RESULT, "e aí, tudo certo com você")
+        self.controller.play_cue.assert_called_with("close")
+
+    def test_som_desligado(self):
+        self.controller.preferences.save({"continuous_sound": False}, [])
+        self.listen_again()
+        self.event(State.ERROR, reason=Reason.NO_SPEECH)
+        self.controller.play_cue.assert_not_called()
+
     def test_ajustes_por_voz(self):
+        self.assertEqual(settings_command("desativar som do modo contínuo"), ("continuous_sound", False))
         self.assertEqual(settings_command("ativar modo contínuo"), ("continuous_mode", True))
         self.assertEqual(settings_command("desativar modo contínuo"), ("continuous_mode", False))
         self.assertEqual(settings_command("tempo do modo contínuo 8 segundos"), ("continuous_seconds", 8.0))

@@ -108,6 +108,20 @@ class VoiceCaptureTest(unittest.TestCase):
         sent = [call.args[0] for call in service.connection.send_audio.call_args_list]
         self.assertEqual(sent, chunks)
 
+    def test_avisa_uma_vez_quando_a_fala_comeca(self):
+        # O modo contínuo apaga a contagem nesse momento: a frase pode durar mais que a espera.
+        from wakeword.streaming_service import StreamingVoiceService
+
+        service = StreamingVoiceService(speech_config=SpeechConfig())
+        service.connection = Mock()
+        service.vad = Mock()
+        service.on_speech_start = Mock()
+        service.vad.predict.side_effect = [0.1] * 5 + [0.9] * 6 + [0.0] * 25
+        chunks = [bytes([index, 0]) * 1280 for index in range(36)]
+        with patch("wakeword.streaming_service._read_chunk", side_effect=chunks):
+            service._stream_audio(None, None, 1)
+        service.on_speech_start.assert_called_once_with()
+
     def test_bar_waits_until_end_of_speech_and_audio_is_preserved(self):
         from wakeword.events import State
         from wakeword.streaming_service import StreamingVoiceService

@@ -1,12 +1,38 @@
 """Adaptação dos eventos do serviço de voz para a thread gráfica."""
 import logging
 import sys
+import time
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from wakeword.events import State, VoiceEvent, Reason
+from .commands import ends_conversation
 from .interaction import InteractionCoordinator, Presentation
+
+
+# Sons curtos do sistema para o modo contínuo: um quando a escuta abre, outro quando ela acaba.
+CUE_SOUNDS = {"open": "Tink", "close": "Bottle"}
+
+
+def play_cue(kind):
+    """Toca o sinal do modo contínuo, sem travar a interface. Sem som disponível, não faz nada."""
+    try:
+        if sys.platform == "darwin":
+            from AppKit import NSSound
+            sound = NSSound.soundNamed_(CUE_SOUNDS[kind])
+            if sound is not None:
+                sound.stop()
+                sound.play()
+            return
+        if sys.platform == "win32":
+            import winsound
+            winsound.MessageBeep(winsound.MB_OK if kind == "open" else winsound.MB_ICONASTERISK)
+            return
+        from PySide6.QtWidgets import QApplication
+        QApplication.beep()
+    except Exception:
+        logging.debug("Sinal sonoro indisponível", exc_info=True)
 
 
 class VoiceThread(QThread):
@@ -35,6 +61,7 @@ class VoiceController(QObject):
     audio_level = Signal(int)
     diagnostic_result = Signal(str)
     devices_changed = Signal(object)
+    speech_started = Signal()  # vem da thread do microfone; o Qt entrega na thread da interface
 
     def __init__(self, parent=None, service_factory=None, screen_factory=None, preferences=None):
         super().__init__(parent)
@@ -58,6 +85,10 @@ class VoiceController(QObject):
         # Modo contínuo: depois de um comando que deu certo, ouve o próximo sem "Hey Jarvis".
         self._follow_up = False
         self._follow_up_text = None  # o resultado que volta para a barra se ninguém falar
+        # (início, segundos) da espera do modo contínuo; a barra desenha a contagem com isso.
+        self.follow_up_countdown = None
+        self.play_cue = play_cue
+        self.speech_started.connect(self._speech_started)
         self._processing_timer = QTimer(self)
         self._processing_timer.setSingleShot(True)
         self._processing_timer.setInterval(5000)
@@ -105,6 +136,8 @@ class VoiceController(QObject):
         guidance = ""
         if state in (State.LISTENING, State.PROCESSING):
             guidance, message = self._screen_text or "", state.value
+            if self.follow_up_countdown is not None:
+                guidance = "Pode falar o próximo comando, ou diga pronto para encerrar."
         elif self._voice_event.capture_ready:
             if self.screen.session.active:
                 waiting = self.screen.session.state.value in {"choosing", "confirming", "dictating", "scroll_waiting", "scroll_choosing"}
@@ -150,6 +183,25 @@ class VoiceController(QObject):
         self._queue_capture(lambda: self._follow_up and not self.screen.session.active and not self.shortcuts.active,
                             start_timeout=values["continuous_seconds"])
 
+    def _cue(self, kind):
+        if self.preferences.effective["continuous_sound"]:
+            self.play_cue(kind)
+
+    def _speech_started(self):
+        # Começou a falar: a espera acabou, então a contagem some (a frase pode levar mais tempo).
+        if self.follow_up_countdown is not None:
+            self.follow_up_countdown = None
+            self.state_changed.emit(self.current_event)
+
+    def _end_follow_up(self, text):
+        """Fim do modo contínuo sem um comando novo: som de encerramento e volta ao Hey Jarvis."""
+        self._follow_up = False
+        self.follow_up_countdown = None
+        self._cue("close")
+        self._screen_text = text
+        self.current_event = replace(self._voice_event, text=text) if text else self._voice_event
+        self._present()
+
     def _queue_capture(self, valid=lambda: True, *, start_timeout=None):
         self._capture_ticket += 1
         ticket, generation, thread = self._capture_ticket, self.coordinator.generation, self.thread
@@ -191,6 +243,7 @@ class VoiceController(QObject):
                                                 values["max_seconds"], SpeechConfig.from_environment().pre_roll_seconds)
         service.on_level = self.audio_level.emit
         service.on_devices = self.devices_changed.emit
+        service.on_speech_start = self.speech_started.emit
         service.set_paused(self.settings_open)
         service.context_listening = self.settings_open
 
@@ -287,6 +340,8 @@ class VoiceController(QObject):
             return
         self._last_received_event = event
         self._voice_event = event
+        if event.state is not State.LISTENING:
+            self.follow_up_countdown = None
         silence = event.state is State.ERROR and event.reason in (Reason.NO_SPEECH, Reason.EMPTY_TRANSCRIPT)
         scroll_silence = silence and self.screen.session.scroll_continuing is True
         follow_up_silence = (silence and self._follow_up and not self.screen.session.active
@@ -317,6 +372,9 @@ class VoiceController(QObject):
             self._ignore_result = False
             if not self.shortcuts.active and not self.settings_open:
                 self.screen.session.begin_capture()
+            if self._follow_up and self.follow_up_countdown is None:
+                self.follow_up_countdown = (time.monotonic(), self.preferences.effective["continuous_seconds"])
+                self._cue("open")
             if not self.screen.session.active and not self.shortcuts.active and not self.settings_open and not self.coordinator.retries:
                 self._screen_text = None
         if event.state is State.ERROR and event.reason in (Reason.NO_SPEECH, Reason.EMPTY_TRANSCRIPT):
@@ -325,10 +383,7 @@ class VoiceController(QObject):
                 return
             if follow_up_silence:
                 # Ninguém falou: o último resultado continua à vista e o Jarvis volta ao Hey Jarvis.
-                self._follow_up = False
-                self._screen_text = self._follow_up_text
-                self.current_event = replace(self._voice_event, text=self._screen_text) if self._screen_text else self._voice_event
-                self._present()
+                self._end_follow_up(self._follow_up_text)
                 return
             self._recognition_failed("Não detectei sua fala. Vou ouvir mais uma vez." if event.reason is Reason.NO_SPEECH else
                                      "Não consegui entender sua fala. Tente novamente.")
@@ -351,6 +406,9 @@ class VoiceController(QObject):
             follow_up, self._follow_up = self._follow_up, False
             if self._ignore_result:
                 return
+            if follow_up and not self.screen.session.active and not self.shortcuts.active and ends_conversation(event.text):
+                self._end_follow_up("Modo contínuo encerrado. Diga Hey Jarvis quando precisar.")
+                return
             route = self.coordinator.route(event.text, **self._context())
             if route == "help":
                 self.show_help()
@@ -372,7 +430,7 @@ class VoiceController(QObject):
                 return
             if follow_up:
                 # Na escuta do modo contínuo, uma frase solta (alguém conversando perto) não insiste.
-                self._show_text("Não reconheci esse comando. Diga Hey Jarvis para tentar de novo.")
+                self._end_follow_up("Não reconheci esse comando. Diga Hey Jarvis para tentar de novo.")
                 return
             self._recognition_failed("Não reconheci esse comando. Tente ‘mostrar números’, ‘digitar’ ou ‘ajuda’. Ouvindo novamente…")
             return
@@ -412,6 +470,7 @@ class VoiceController(QObject):
         self.coordinator.invalidate()
         self._capture_ticket += 1
         self._follow_up = False
+        self.follow_up_countdown = None
         if self.shortcuts.active:
             self.shortcuts.cancel("Atalho cancelado.")
             self._invalidate_voice()

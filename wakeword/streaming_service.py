@@ -60,6 +60,7 @@ class StreamingVoiceService(VoiceService):
                 prefix.append(chunk)
                 if gate.has_speech:
                     sent_speech = True
+                    self.on_speech_start()
                     for buffered in prefix:
                         self.connection.send_audio(buffered)
                     prefix.clear()
