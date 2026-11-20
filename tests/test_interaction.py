@@ -312,7 +312,7 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         began, seconds = self.controller.follow_up_countdown
         self.assertEqual(seconds, 6.0)
         self.controller.play_cue.assert_called_once_with("open")
-        self.assertIn("diga obrigado, Jarvis para encerrar", self.controller.presentation.guidance)
+        self.assertIn("obrigado, Jarvis", self.controller.presentation.guidance)
 
     def test_a_contagem_some_quando_a_fala_comeca(self):
         self.listen_again()

@@ -137,7 +137,7 @@ class VoiceController(QObject):
         if state in (State.LISTENING, State.PROCESSING):
             guidance, message = self._screen_text or "", state.value
             if self.follow_up_countdown is not None:
-                guidance = "Pode falar o próximo comando, ou diga obrigado, Jarvis para encerrar."
+                guidance = "Fale o próximo comando ou diga “obrigado, Jarvis”."
         elif self._voice_event.capture_ready:
             if self.screen.session.active:
                 waiting = self.screen.session.state.value in {"choosing", "confirming", "dictating", "scroll_waiting", "scroll_choosing"}
