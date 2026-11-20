@@ -296,15 +296,68 @@ class MissionControlSessionTest(unittest.TestCase):
         self.session.receive(0, "foreground", snapshot().window)
         self.session.begin_capture()
 
-    def test_mostrar_janelas_abre_e_orienta_o_proximo_passo(self):
+    MISSION_CONTROL = Window("missioncontrol:631", 631, "Mission Control", (0, 0, 1470, 956))
+
+    def windows(self):
+        return Snapshot("mc-1", self.MISSION_CONTROL, (
+            Element(1, "README.md — J.A.R.V.I.S", "AXButton", (100, 100, 400, 300), "press"),
+            Element(2, "Feed | LinkedIn", "AXButton", (600, 100, 400, 300), "press"),
+            Element(3, "Mesa", "AXButton", (100, 20, 80, 50), "press"),
+        ))
+
+    def show_windows(self, phrase="mostrar janelas"):
+        self.assertTrue(self.session.handle(phrase))
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("mission_control", True))
+        self.assertEqual(self.views[-1].text, "Mostrando as janelas…")
+        self.session.receive(0, "foreground", self.MISSION_CONTROL)
+        self.session.receive(self.session.token, "mission_control", self.MISSION_CONTROL)
+        self.assertEqual(self.executor.submit.call_args.args[1:],
+                         ("scan", self.MISSION_CONTROL, 32, 3000, False))
+        self.session.receive(self.session.token, "scan", self.windows())
+
+    def test_mostrar_janelas_ja_mostra_os_numeros_e_fica_ouvindo(self):
         for phrase in ("mostrar janelas", "Mostre as janelas!", "ver as janelas"):
             with self.subTest(phrase=phrase):
-                self.assertTrue(self.session.handle(phrase))
-                self.assertEqual(self.executor.submit.call_args.args[1:], ("mission_control", True))
-                self.assertEqual(self.views[-1].text, "Mostrando as janelas…")
-                self.session.receive(self.session.token, "mission_control", True)
-                self.assertFalse(self.session.active)
-                self.assertEqual(self.views[-1].text, "Janelas à mostra. Diga mostrar números para escolher uma.")
+                self.show_windows(phrase)
+                self.assertEqual(self.session.state, ActionState.CHOOSING)
+                view = self.views[-1]
+                self.assertEqual(view.text, "Diga o número da janela ou cancelar.")
+                self.assertEqual([element.number for element in view.markers], [1, 2, 3])
+                self.assertTrue(view.capture)  # ouve o número sem precisar de "Hey Jarvis"
+                self.session.cancel()
+
+    def test_o_numero_leva_direto_a_janela_sem_confirmar(self):
+        self.show_windows()
+        self.session.handle("dois")
+        self.assertEqual(self.session.state, ActionState.EXECUTING)
+        self.assertEqual(self.views[-1].text, "Abrindo [2] Feed | LinkedIn…")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("activate", self.windows(), 2))
+        self.session.receive(self.session.token, "activate", None)
+        self.assertFalse(self.session.active)
+        self.assertEqual(self.views[-1].text, "Janela escolhida.")
+        self.assertFalse(self.session.choosing_window)
+
+    def test_numero_fora_da_lista_pede_de_novo(self):
+        self.show_windows()
+        self.session.handle("nove")
+        self.assertEqual(self.session.state, ActionState.CHOOSING)
+        self.assertTrue(self.views[-1].capture)
+
+    def test_cancelar_esconde_os_numeros_das_janelas(self):
+        self.show_windows()
+        self.session.handle("cancelar")
+        self.assertFalse(self.session.active)
+        self.assertFalse(self.session.choosing_window)
+
+    def test_controles_comuns_continuam_pedindo_confirmacao(self):
+        self.show_windows()
+        self.session.cancel()
+        self.session.receive(0, "foreground", snapshot().window)
+        self.session.begin_capture()
+        self.session.handle("mostrar números")
+        self.session.receive(self.session.token, "scan", snapshot())
+        self.session.handle("um")
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
 
     def test_fechar_janelas(self):
         self.session.handle("fechar janelas")
@@ -321,13 +374,10 @@ class MissionControlSessionTest(unittest.TestCase):
         self.assertEqual(self.executor.submit.call_args.args[1:], ("mission_control", True))
 
     def test_abrir_as_janelas_nao_e_tomado_por_troca_de_janela(self):
-        self.session.handle("mostrar janelas")
-        mission_control = Window("missioncontrol:631", 631, "Mission Control", (0, 0, 1470, 956))
-        self.session.receive(0, "foreground", mission_control)
-        self.session.receive(self.session.token, "mission_control", True)
-        self.assertEqual(self.views[-1].text, "Janelas à mostra. Diga mostrar números para escolher uma.")
-        self.session.begin_capture()
-        self.assertEqual(self.session.target, mission_control)
+        self.show_windows()
+        self.session.receive(0, "foreground", self.MISSION_CONTROL)
+        self.assertEqual(self.session.state, ActionState.CHOOSING)
+        self.assertEqual(self.session.target, self.MISSION_CONTROL)
 
     def test_durante_o_ditado_e_texto_e_durante_execucao_espera(self):
         self.session.state = ActionState.DICTATING

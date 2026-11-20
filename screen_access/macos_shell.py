@@ -18,6 +18,7 @@ SHELL_ROLES = frozenset({DOCK_ITEM, "AXImage"})
 MISSION_CONTROL_APP = "com.apple.exposelauncher"
 MISSION_CONTROL_ITEM = "AXButton"
 MISSION_CONTROL_WAIT = 2.0  # a animação de entrada e saída leva menos de meio segundo
+MISSION_CONTROL_SETTLE = 1.0  # limite para as miniaturas terminarem de chegar ao lugar
 
 
 def children(element):
@@ -91,3 +92,22 @@ def toggle_mission_control(opened, dock_pid, runner=None, clock=time.monotonic, 
             return False
         sleep(0.05)
     return True
+
+
+def wait_mission_control_settled(dock_pid, clock=time.monotonic, sleep=time.sleep):
+    """Espera as miniaturas pararem de se mexer antes de numerar.
+
+    Logo que o Mission Control aparece, elas ainda estão crescendo até o lugar; números lidos nessa
+    hora ficariam fora das janelas. Duas leituras iguais seguidas bastam.
+    """
+    deadline = clock() + MISSION_CONTROL_SETTLE
+    previous = None
+    while True:
+        root = mission_control(dock_pid)
+        if root is None:
+            return  # fechou no meio do caminho; quem chamou percebe
+        current = tuple(macos.element_frame(item) for item in mission_control_items(root))
+        if (current and current == previous) or clock() >= deadline:
+            return
+        previous = current
+        sleep(0.1)

@@ -247,7 +247,14 @@ class MacOSBackend(ScrollMixin, Backend):
             raise ScreenError("O Dock não está em execução; o Mission Control depende dele.")
         if not macos_shell.toggle_mission_control(opened, dock_pid):
             raise ScreenError("O Mission Control não " + ("abriu." if opened else "fechou.") + " Tente de novo.")
-        return opened
+        if not opened:
+            return None
+        # Devolve a "janela" do Mission Control: a sessão já numera as janelas sem outro comando.
+        macos_shell.wait_mission_control_settled(dock_pid)
+        window = self.mission_control_window()
+        if window is None:
+            raise ScreenError("O Mission Control foi fechado.")
+        return window
 
     # --- Digitação no campo ativo -------------------------------------------------------------
 

@@ -68,6 +68,8 @@ class ScreenSession:
         self.is_dictation = False
         self.pending_action = "activate"
         self.selection = None  # ("all"|"last_word"|"text", trecho) enquanto o campo é procurado
+        # Janelas do Mission Control: o número escolhido vai direto, sem pedir confirmação.
+        self.choosing_window = False
         self.retry_count = 0
         self.deadline = None
         self._step = self.state
@@ -142,6 +144,7 @@ class ScreenSession:
         self.is_dictation = False
         self.pending_action = "activate"
         self.selection = None
+        self.choosing_window = False
         self._reset_scroll()
         self.view(text)
 
@@ -238,7 +241,8 @@ class ScreenSession:
                 self.state = ActionState.CHOOSING
                 self.candidates = tuple(element.number for element in data.elements)
                 limit = " Lista parcial: limite atingido ou ramo inacessível." if data.truncated else ""
-                self.view("Diga o número do controle ou cancelar." + limit, data.elements, True)
+                ask = "Diga o número da janela ou cancelar." if self.choosing_window else "Diga o número do controle ou cancelar."
+                self.view(ask + limit, data.elements, True)
             else:
                 self.select(self.pending_phrase)
         elif kind == "prepare_dictation":
@@ -278,9 +282,19 @@ class ScreenSession:
         elif kind in ("select_text", "copy_text", "cut_text", "paste_text"):
             self.cancel(data)
         elif kind in ("activate", "open_item", "context_menu"):
-            self.cancel("Pedido aceito pelo aplicativo.")
+            self.cancel("Janela escolhida." if self.choosing_window else "Pedido aceito pelo aplicativo.")
         elif kind == "mission_control":
-            self.cancel("Janelas à mostra. Diga mostrar números para escolher uma." if data else "Janelas fechadas.")
+            if not data:
+                self.cancel("Janelas fechadas.")
+                return
+            # Os números já aparecem e o Jarvis fica ouvindo: basta dizer o número, sem "Hey Jarvis".
+            self.target = data
+            self.choosing_window = True
+            self.pending_phrase = None
+            self.state = ActionState.READING
+            self.token += 1
+            self.view("Numerando as janelas…")
+            self.executor.submit(self.token, "scan", data, self.max_depth, self.max_elements, False)
 
     def confirm_dictation(self):
         self.state = ActionState.CONFIRMING
@@ -289,6 +303,14 @@ class ScreenSession:
 
     def confirm_selection(self, number):
         self.selected = number
+        if self.choosing_window and self.pending_action == "activate":
+            # Ir para uma janela só muda o que está na frente; não vale a pena perguntar.
+            element = self.snapshot.elements[number-1]
+            self.state = ActionState.EXECUTING
+            self.token += 1
+            self.view(f"Abrindo [{number}] {element.name or '(sem nome)'}…")
+            self.executor.submit(self.token, "activate", self.snapshot, number)
+            return
         self.state = ActionState.CONFIRMING
         element = self.snapshot.elements[number-1]
         label = {"activate": "Acionar", "open_item": "Abrir com duplo clique",

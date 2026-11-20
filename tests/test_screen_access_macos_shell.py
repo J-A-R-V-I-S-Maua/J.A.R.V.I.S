@@ -361,9 +361,51 @@ class MissionControlToggleTest(unittest.TestCase):
 
     def test_mostrar_janelas_abre_pelo_app_do_sistema(self):
         env, calls = self.environment()
-        self.assertTrue(env.backend.mission_control(True))
+        window = env.backend.mission_control(True)
         self.assertEqual(calls, [["/usr/bin/open", "-b", "com.apple.exposelauncher"]])
-        self.assertTrue(env.backend.foreground().identity.startswith("missioncontrol:"))
+        # Devolve a própria "janela" do Mission Control, pronta para ser numerada.
+        self.assertEqual(window, env.backend.foreground())
+        self.assertTrue(window.identity.startswith("missioncontrol:"))
+        self.assertEqual(len(env.backend.scan(window).elements), 4)
+
+    def test_espera_as_miniaturas_pararem_antes_de_numerar(self):
+        env, _ = self.environment(opened=True)
+        shell = env.module.macos_shell
+        sizes = iter([(10, 10, 40, 30), (10, 10, 120, 90), (10, 10, 200, 150)])
+        moving = env.frames["readme"]
+
+        def frame(element):
+            if element == "readme":
+                nonlocal moving
+                moving = next(sizes, moving)  # cresce até o lugar e para
+                return moving
+            return env.frames.get(element)
+
+        env.macos.element_frame = frame
+        naps = []
+        shell.wait_mission_control_settled(DOCK, sleep=naps.append)
+        self.assertEqual(len(naps), 3)
+        self.assertEqual(moving, (10, 10, 200, 150))
+
+    def test_espera_tem_limite_mesmo_se_algo_nao_parar(self):
+        env, _ = self.environment(opened=True)
+        shell = env.module.macos_shell
+        counter = iter(range(1000))
+        env.macos.element_frame = lambda element: (next(counter), 0, 10, 10)
+        now = [0.0]
+
+        def nap(seconds):
+            now[0] += seconds
+
+        shell.wait_mission_control_settled(DOCK, clock=lambda: now[0], sleep=nap)
+        self.assertLessEqual(now[0], shell.MISSION_CONTROL_SETTLE + 0.1)
+
+    def test_fechado_no_meio_da_espera_desiste(self):
+        env, _ = self.environment(opened=True)
+        env.set_mission_control(False)
+        naps = []
+        env.module.macos_shell.wait_mission_control_settled(DOCK, sleep=naps.append)
+        self.assertEqual(naps, [])
 
     def test_ja_aberto_nao_alterna_de_novo(self):
         env, calls = self.environment(opened=True)
