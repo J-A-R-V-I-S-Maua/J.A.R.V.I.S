@@ -312,7 +312,7 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         began, seconds = self.controller.follow_up_countdown
         self.assertEqual(seconds, 6.0)
         self.controller.play_cue.assert_called_once_with("open")
-        self.assertIn("diga pronto para encerrar", self.controller.presentation.guidance)
+        self.assertIn("diga obrigado, Jarvis para encerrar", self.controller.presentation.guidance)
 
     def test_a_contagem_some_quando_a_fala_comeca(self):
         self.listen_again()
@@ -328,8 +328,8 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         self.controller.play_cue.assert_called_with("close")
         self.assertIsNone(self.controller.follow_up_countdown)
 
-    def test_pronto_e_obrigado_encerram_em_silencio(self):
-        for phrase in ("Pronto.", "Obrigado, Jarvis!", "por enquanto é só", "parar"):
+    def test_obrigado_jarvis_encerra_em_silencio(self):
+        for phrase in ("Obrigado, Jarvis!", "obrigado jarvis", "Obrigada, Jarvis."):
             with self.subTest(phrase=phrase):
                 self.listen_again()
                 submits = self.controller.screen.executor.submit.call_count
@@ -341,11 +341,18 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
                 self.controller.play_cue.assert_called_with("close")
                 self.assertFalse(self.controller._follow_up)
 
-    def test_fora_do_modo_continuo_pronto_nao_e_especial(self):
+    def test_outras_frases_nao_sao_o_encerramento(self):
+        for phrase in ("pronto", "obrigado", "por enquanto é só", "obrigado pela ajuda, Jarvis"):
+            with self.subTest(phrase=phrase):
+                self.listen_again()
+                self.event(State.RESULT, phrase)
+                self.assertNotIn("Modo contínuo encerrado", self.controller.text)
+
+    def test_fora_do_modo_continuo_obrigado_jarvis_nao_e_especial(self):
         self.event(State.LISTENING)
         self.assertIsNone(self.controller.follow_up_countdown)
         self.controller.play_cue.assert_not_called()
-        self.event(State.RESULT, "pronto")
+        self.event(State.RESULT, "obrigado jarvis")
         self.assertNotIn("Modo contínuo encerrado", self.controller.text)
 
     def test_frase_solta_tambem_toca_o_encerramento(self):

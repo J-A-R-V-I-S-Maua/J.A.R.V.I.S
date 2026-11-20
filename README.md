@@ -243,8 +243,7 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   atalho, um aplicativo aberto…), o Jarvis já fica ouvindo o próximo por alguns segundos, sem
   precisar de “Hey Jarvis”: “abrir Chrome”, “nova aba”, “próxima aba”… Se ninguém falar, ele
   volta em silêncio a esperar o “Hey Jarvis”; uma frase que não é comando também não gera
-  insistência. Para encerrar antes, diga **“pronto”**, **“obrigado”**, **“parar”** ou “por
-  enquanto é só”. Enquanto espera, um anel em volta do botão de voz vai se esvaziando até o
+  insistência. Para encerrar antes, diga **“obrigado, Jarvis”**. Enquanto espera, um anel em volta do botão de voz vai se esvaziando até o
   fim do tempo; ele some assim que você começa a falar, porque a frase pode durar mais que a
   espera. Um som curto avisa quando a escuta abre e outro quando ela acaba. Liga e desliga
   em Configurações → Voz e microfone (padrão: ligado, 6 segundos, com som), ou por voz com as
