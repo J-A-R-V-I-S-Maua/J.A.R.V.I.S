@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 
-from screen_access.commands import CONFIRM, parse_number
+from screen_access.commands import CONFIRM, browser_command, parse_number
 
 from .applications import find_application, is_open_request, open_application
 from .commands import normalize
@@ -50,7 +50,7 @@ class LauncherConversation(ShortcutConversation):
             return super().handle(text)
         if super().handle(text):
             return True
-        if is_open_request(text):
+        if is_open_request(text) and browser_command(text) is None:  # "abrir nova aba" é do navegador
             self._open(text)
             return True
         return False
@@ -151,3 +151,4 @@ class LauncherConversation(ShortcutConversation):
             self.changed.emit(f"Não consegui abrir {app.name}. {exc}")
         else:
             self.changed.emit(f"Abertura de {app.name} solicitada ao sistema.")
+            self.succeeded.emit()

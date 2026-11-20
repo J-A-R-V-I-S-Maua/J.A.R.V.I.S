@@ -111,3 +111,25 @@ def wait_mission_control_settled(dock_pid, clock=time.monotonic, sleep=time.slee
             return
         previous = current
         sleep(0.1)
+
+
+def menu_item_with_shortcut(pid, char, modifiers=0):
+    """O item da barra de menus de um app com esse atalho, ou None. Entre dois iguais, o ativo.
+
+    Procura pelo atalho, não pelo nome: funciona em qualquer idioma e em qualquer layout de
+    teclado (no ABNT2 o "[" fica em outra tecla). Os modificadores seguem a AX: 0 é só o ⌘,
+    1 soma o Shift, 4 soma o Control e 8 tira o ⌘ (o Ctrl+Tab é 12).
+    """
+    if pid is None:
+        return None
+    bar = macos.read_attribute(macos.application_element(pid), "AXMenuBar")
+    found = None
+    for top in children(bar) if bar is not None else ():
+        for menu in children(top):
+            for item in children(menu):
+                if (macos.read_attribute(item, "AXMenuItemCmdChar") == char
+                        and macos.read_attribute(item, "AXMenuItemCmdModifiers") == modifiers):
+                    if macos.read_attribute(item, "AXEnabled"):
+                        return item
+                    found = found or item
+    return found

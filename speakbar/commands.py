@@ -1,12 +1,13 @@
 """Vocabulário compartilhado de comandos; nunca interpreta texto ditado."""
 import re
-import unicodedata
 from decimal import Decimal, InvalidOperation
+
+from screen_access.matching import plain_text
 
 
 def normalize(text):
-    text = unicodedata.normalize("NFKD", text.casefold())
-    return " ".join(re.findall(r"[a-z0-9]+", "".join(c for c in text if not unicodedata.combining(c))))
+    """Palavras sem acentos nem pontuação, como as frases cadastradas são comparadas."""
+    return " ".join(re.findall(r"[a-z0-9]+", plain_text(text)))
 
 
 SETTINGS_COMMANDS = {normalize(text) for text in (
@@ -15,13 +16,13 @@ SETTINGS_COMMANDS = {normalize(text) for text in (
 )}
 HELP_COMMANDS = {"ajuda", "o que posso dizer", "quais comandos"}
 HELP = {
-    "general": "Diga mostrar números, mostrar janelas, clique em [nome], digitar [texto], selecionar a palavra [texto], copiar texto, colar texto, role para baixo, role para cima, Enter, limpar campo, executar atalho ou abrir configurações.",
+    "general": "Diga mostrar números, mostrar janelas, clique em [nome], digitar [texto], selecionar a palavra [texto], copiar texto, colar texto, role para baixo, role para cima, Enter, limpar campo, nova aba, fechar aba, próxima aba, voltar página, executar atalho ou abrir configurações.",
     "choosing": "Diga um dos números exibidos, confirmar após escolher, ou cancelar.",
     "confirming": "Diga confirmar ou sim para executar; cancelar ou não para abandonar.",
     "shortcut": "Diga a frase cadastrada nas configurações ou cancelar.",
     "scroll_waiting": "Diga mais, para cima, para baixo, role um pouco para baixo ou role uma página para cima. Parar, cancelar ou silêncio encerra a rolagem.",
     "scroll_choosing": "Diga o número de uma das áreas roláveis exibidas ou cancelar. A rolagem será executada diretamente nessa área.",
-    "settings": "Diga ir para atalhos, ir para voz e microfone, ir para aparência e acessibilidade, ir para ajuda e diagnóstico, salvar configurações ou fechar configurações. Ajustes: tamanho do texto 22, tamanho dos números 18, ativar alto contraste, ativar lembrar posição, tempo de silêncio 3 segundos, tempo para começar a falar 15 segundos, duração máxima 30 segundos, limiar de ativação 0,3. Use desativar para desligar as opções.",
+    "settings": "Diga ir para atalhos, ir para voz e microfone, ir para aparência e acessibilidade, ir para ajuda e diagnóstico, salvar configurações ou fechar configurações. Ajustes: tamanho do texto 22, tamanho dos números 18, ativar alto contraste, ativar lembrar posição, ativar modo contínuo, tempo do modo contínuo 8 segundos, tempo de silêncio 3 segundos, tempo para começar a falar 15 segundos, duração máxima 30 segundos, limiar de ativação 0,3. Use desativar para desligar as opções.",
 }
 RESERVED = SETTINGS_COMMANDS | HELP_COMMANDS | {"cancelar", "cancele", "nao", "parar", "pare", "sim", "confirmar", "confirme", "executar atalho"}
 
@@ -80,15 +81,16 @@ def settings_command(text):
     if phrase in ("cancelar configuracoes", "fechar configuracoes"):
         return "close", None
     for prefix, enabled in (("ativar ", True), ("desativar ", False)):
-        for label, key in (("alto contraste", "high_contrast"), ("lembrar posicao", "remember_position")):
+        for label, key in (("alto contraste", "high_contrast"), ("lembrar posicao", "remember_position"),
+                           ("modo continuo", "continuous_mode")):
             if phrase == prefix + label:
                 return key, enabled
     prefixes = {"tamanho do texto": "text_size", "tamanho dos numeros": "number_size",
                 "tempo de silencio": "silence_seconds", "tempo para comecar a falar": "start_timeout",
-                "duracao maxima": "max_seconds", "limiar de ativacao": "detection_threshold"}
+                "duracao maxima": "max_seconds", "limiar de ativacao": "detection_threshold",
+                "tempo do modo continuo": "continuous_seconds"}
     # Trabalhar sobre o texto sem acentos, preservando a pontuação decimal.
-    raw = "".join(c for c in unicodedata.normalize("NFKD", text.casefold()) if not unicodedata.combining(c)).strip()
-    raw = " ".join(raw.split())
+    raw = " ".join(plain_text(text).split())
     for prefix, key in prefixes.items():
         if raw.startswith(prefix + " "):
             value = re.sub(r"\s+segundos?\s*[.!?]?$", "", raw[len(prefix):].strip()).rstrip(".!?")

@@ -1,6 +1,5 @@
 """Comandos explícitos e números PT-BR, sem interpretar fala livre como ação."""
 from .matching import MIN_MARGIN, tokenize, word_similarity
-from .matching import tokenize
 from difflib import SequenceMatcher
 from enum import Enum
 import re
@@ -168,18 +167,52 @@ def select_command(text):
     return ("text", match[1]) if match else None
 
 
-def field_command(text):
-    """Comando de campo da frase: exato, ou o único que soa como ela ("Polar texto" é colar texto).
+# Navegador: abas e páginas. Só valem com um navegador na frente (o backend confere).
+BROWSER_COMMANDS = {normalized(text): action for text, action in (
+    ("nova aba", "new_tab"), ("abrir nova aba", "new_tab"), ("abrir uma nova aba", "new_tab"),
+    ("abra uma nova aba", "new_tab"), ("abre uma nova aba", "new_tab"), ("nova guia", "new_tab"),
+    ("fechar aba", "close_tab"), ("fechar a aba", "close_tab"), ("feche a aba", "close_tab"),
+    ("fecha a aba", "close_tab"), ("fechar guia", "close_tab"), ("fechar esta aba", "close_tab"),
+    ("reabrir aba", "reopen_tab"), ("reabrir a aba", "reopen_tab"), ("reabra a aba", "reopen_tab"),
+    ("próxima aba", "next_tab"), ("aba seguinte", "next_tab"), ("próxima guia", "next_tab"),
+    ("aba anterior", "previous_tab"), ("guia anterior", "previous_tab"),
+    ("última aba", "last_tab"),
+    ("voltar página", "back"), ("voltar a página", "back"), ("volta a página", "back"),
+    ("voltar uma página", "back"), ("página anterior", "back"),
+    ("avançar página", "forward"), ("avançar a página", "forward"), ("avançar uma página", "forward"),
+    ("próxima página", "forward"),
+    ("recarregar", "reload"), ("recarregar página", "reload"), ("recarregar a página", "reload"),
+    ("recarrega a página", "reload"), ("atualizar página", "reload"), ("atualizar a página", "reload"),
+)}
+BROWSER_ACTIONS = frozenset(BROWSER_COMMANDS.values()) | {"tab"}
+# Tudo o que a frase pode ser quando só soa como um comando: campo e navegador disputam juntos.
+SPOKEN_COMMANDS = {**FIELD_COMMANDS, **BROWSER_COMMANDS}
+
+
+def browser_command(text):
+    """("new_tab"|…|"tab", número da aba ou None), ou None. "Ir para a aba 3" vira ("tab", 3)."""
+    phrase = normalized(text)
+    if phrase in BROWSER_COMMANDS:
+        return BROWSER_COMMANDS[phrase], None
+    match = re.fullmatch(r"(?:(?:ir|va|vai) para (?:a )?)?aba (?:numero )?(.+)", phrase)
+    number = parse_number(match[1]) if match else None
+    if number is not None and 1 <= number <= 8:
+        return "tab", number
+    return None
+
+
+def field_command(text, table=FIELD_COMMANDS):
+    """Comando da frase: exato, ou o único que soa como ela ("Polar texto" é colar texto).
 
     A transcrição troca palavras curtas por outras parecidas. Só aceita quando todas as palavras
     soam como as de um comando e nenhuma ação diferente fica perto; nunca adivinha.
     """
     phrase = normalized(text)
-    if phrase in FIELD_COMMANDS:
-        return FIELD_COMMANDS[phrase]
+    if phrase in table:
+        return table[phrase]
     words = phrase.split()
     scored = {}
-    for key, action in FIELD_COMMANDS.items():
+    for key, action in table.items():
         parts = key.split()
         if len(parts) != len(words):
             continue

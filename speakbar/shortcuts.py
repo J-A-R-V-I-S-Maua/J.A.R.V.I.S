@@ -109,6 +109,7 @@ class ShortcutConversation(QObject):
     changed = Signal(str)
     capture_requested = Signal()
     cancelled = Signal()
+    succeeded = Signal()  # um atalho rodou: o modo contínuo pode ouvir o próximo comando
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -189,7 +190,9 @@ class ShortcutConversation(QObject):
             try:
                 message = self.service.execute(item)
             except ValueError as exc:
-                message = str(exc)
+                self.changed.emit(str(exc))
+                return
             self.changed.emit(message)
+            self.succeeded.emit()
 
         QTimer.singleShot(0, launch)

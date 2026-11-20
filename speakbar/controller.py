@@ -55,6 +55,9 @@ class VoiceController(QObject):
         self.coordinator = InteractionCoordinator()
         self.presentation = Presentation(State.PREPARING, State.PREPARING.value)
         self._capture_ticket = 0
+        # Modo contínuo: depois de um comando que deu certo, ouve o próximo sem "Hey Jarvis".
+        self._follow_up = False
+        self._follow_up_text = None  # o resultado que volta para a barra se ninguém falar
         self._processing_timer = QTimer(self)
         self._processing_timer.setSingleShot(True)
         self._processing_timer.setInterval(5000)
@@ -73,6 +76,7 @@ class VoiceController(QObject):
         self.shortcuts.changed.connect(self._show_text)
         self.shortcuts.cancelled.connect(self._invalidate_voice)
         self.shortcuts.capture_requested.connect(self._request_shortcut_response)
+        self.shortcuts.succeeded.connect(self._listen_for_next)
         self.settings_open = False
         self._diagnostic_test = False
         self._restarting = False
@@ -107,6 +111,8 @@ class VoiceController(QObject):
                 guidance = "Responda sem repetir Hey Jarvis." if waiting else "Aguarde o resultado da operação."
             elif self.shortcuts.active:
                 guidance = "Responda sem repetir Hey Jarvis."
+            elif self._follow_up:
+                guidance = "Pode dizer o próximo comando sem Hey Jarvis."
             else:
                 guidance = "Diga Hey Jarvis ou use o botão para começar."
         self.presentation = Presentation(state, message, guidance, self._voice_event.capture_ready)
@@ -129,6 +135,20 @@ class VoiceController(QObject):
             self._show_text(text)
             if self.shortcuts.active:
                 self._queue_capture(lambda: self.shortcuts.active)
+
+    def _listen_for_next(self):
+        """Modo contínuo: abre uma escuta curta logo depois de um comando que deu certo.
+
+        Silêncio nessa escuta encerra sem aviso de erro e volta a esperar o Hey Jarvis.
+        """
+        values = self.preferences.effective
+        if not values["continuous_mode"] or self.settings_open or self.closing or not self.thread:
+            return
+        self._follow_up = True
+        self._follow_up_text = self._screen_text
+        self._present()
+        self._queue_capture(lambda: self._follow_up and not self.screen.session.active and not self.shortcuts.active,
+                            start_timeout=values["continuous_seconds"])
 
     def _queue_capture(self, valid=lambda: True, *, start_timeout=None):
         self._capture_ticket += 1
@@ -177,6 +197,7 @@ class VoiceController(QObject):
     def set_settings_open(self, opened):
         self.coordinator.invalidate()
         self._capture_ticket += 1
+        self._follow_up = False
         self.settings_open = opened
         self._diagnostic_test = False
         self.shortcuts.cancel()
@@ -266,9 +287,11 @@ class VoiceController(QObject):
             return
         self._last_received_event = event
         self._voice_event = event
-        scroll_silence = (event.state is State.ERROR and event.reason in (Reason.NO_SPEECH, Reason.EMPTY_TRANSCRIPT)
-                          and self.screen.session.scroll_continuing is True)
-        if scroll_silence:
+        silence = event.state is State.ERROR and event.reason in (Reason.NO_SPEECH, Reason.EMPTY_TRANSCRIPT)
+        scroll_silence = silence and self.screen.session.scroll_continuing is True
+        follow_up_silence = (silence and self._follow_up and not self.screen.session.active
+                             and not self.shortcuts.active)
+        if scroll_silence or follow_up_silence:
             self._voice_event = replace(event, state=State.IDLE, reason=None, is_final=False)
         if event.state is State.ERROR and event.reason in (Reason.CONNECTION, Reason.MICROPHONE, Reason.MODEL):
             self._recovering = True
@@ -280,7 +303,7 @@ class VoiceController(QObject):
                 self._processing_timer.start()
         else:
             self._processing_timer.stop()
-        if event.state is State.ERROR and not scroll_silence:
+        if event.state is State.ERROR and not (scroll_silence or follow_up_silence):
             self.last_error = event.text
         if self.settings_open and (self._diagnostic_test or event.diagnostic):
             if event.state is State.ERROR or (self._diagnostic_test and event.state is State.RESULT):
@@ -300,11 +323,19 @@ class VoiceController(QObject):
             if self.screen.session.scroll_continuing is True:
                 self.screen.session.end_scroll()
                 return
+            if follow_up_silence:
+                # Ninguém falou: o último resultado continua à vista e o Jarvis volta ao Hey Jarvis.
+                self._follow_up = False
+                self._screen_text = self._follow_up_text
+                self.current_event = replace(self._voice_event, text=self._screen_text) if self._screen_text else self._voice_event
+                self._present()
+                return
             self._recognition_failed("Não detectei sua fala. Vou ouvir mais uma vez." if event.reason is Reason.NO_SPEECH else
                                      "Não consegui entender sua fala. Tente novamente.")
             return
         if event.state is State.ERROR:
             self._screen_text = None
+            self._follow_up = False
             self.coordinator.invalidate()
             self._capture_ticket += 1
         if event.state is State.ERROR and self.screen.session.active:
@@ -317,6 +348,7 @@ class VoiceController(QObject):
             if event.interaction_id <= self._last_result_id:
                 return
             self._last_result_id = event.interaction_id
+            follow_up, self._follow_up = self._follow_up, False
             if self._ignore_result:
                 return
             route = self.coordinator.route(event.text, **self._context())
@@ -338,6 +370,10 @@ class VoiceController(QObject):
                     return
             if self.screen.session.handle(event.text):
                 return
+            if follow_up:
+                # Na escuta do modo contínuo, uma frase solta (alguém conversando perto) não insiste.
+                self._show_text("Não reconheci esse comando. Diga Hey Jarvis para tentar de novo.")
+                return
             self._recognition_failed("Não reconheci esse comando. Tente ‘mostrar números’, ‘digitar’ ou ‘ajuda’. Ouvindo novamente…")
             return
         self.current_event = replace(event, text=self._screen_text) if self._screen_text else event
@@ -352,6 +388,8 @@ class VoiceController(QObject):
         self._present()
         if view.capture:
             self._request_response()
+        elif getattr(view, "done", False):
+            self._listen_for_next()
 
     def _request_response(self):
         if not self.closing and self.screen.session.active and self.thread:
@@ -363,6 +401,7 @@ class VoiceController(QObject):
     def _invalidate_voice(self):
         self.coordinator.invalidate()
         self._capture_ticket += 1
+        self._follow_up = False
         self._ignore_result = True
         if self.thread:
             self.thread.service.cancel_interaction()
@@ -372,6 +411,7 @@ class VoiceController(QObject):
             return
         self.coordinator.invalidate()
         self._capture_ticket += 1
+        self._follow_up = False
         if self.shortcuts.active:
             self.shortcuts.cancel("Atalho cancelado.")
             self._invalidate_voice()
@@ -390,6 +430,7 @@ class VoiceController(QObject):
         self.closing = True
         self.coordinator.invalidate()
         self._capture_ticket += 1
+        self._follow_up = False
         self._processing_timer.stop()
         self.shortcuts.cancel()
         self.markers_changed.emit(())

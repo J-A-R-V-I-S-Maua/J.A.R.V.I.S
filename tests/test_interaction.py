@@ -233,6 +233,87 @@ class ControllerTest(ControllerFixture, unittest.TestCase):
         self.controller.screen.executor.submit.assert_not_called()
 
 
+class ContinuousModeTest(ControllerFixture, unittest.TestCase):
+    WINDOW = Window("chrome-1", 777, "Google Chrome", (0, 0, 1200, 800))
+
+    def finish_command(self):
+        session = self.controller.screen.session
+        session.last_window = self.WINDOW
+        self.event(State.LISTENING)
+        self.event(State.RESULT, "nova aba")
+        self.assertEqual(self.controller.screen.executor.submit.call_args.args[1:],
+                         ("browser", self.WINDOW, "new_tab", None))
+        with patch.object(self.service, "request_capture", return_value=True) as capture:
+            session.receive(session.token, "browser", "Nova aba aberta.")
+        return capture
+
+    def test_depois_de_um_comando_ouve_o_proximo_sem_hey_jarvis(self):
+        capture = self.finish_command()
+        capture.assert_called_once_with(start_timeout=6.0)
+        self.assertIn("sem Hey Jarvis", self.controller.presentation.guidance)
+
+    def test_silencio_volta_ao_hey_jarvis_sem_erro(self):
+        self.finish_command()
+        self.event(State.LISTENING)
+        self.event(State.ERROR, reason=Reason.NO_SPEECH)
+        self.assertIs(self.controller.state, State.IDLE)
+        self.assertEqual(self.controller.text, "Nova aba aberta.")
+        self.assertEqual(self.controller.last_error, "")
+        self.assertEqual(self.controller.coordinator.retries, 0)
+        self.assertFalse(self.controller._follow_up)
+        self.assertFalse(self.service.trigger_requested.is_set())
+
+    def test_o_proximo_comando_funciona_e_reabre_a_escuta(self):
+        self.finish_command()
+        self.event(State.LISTENING)
+        self.event(State.RESULT, "próxima aba")
+        session = self.controller.screen.session
+        self.assertEqual(self.controller.screen.executor.submit.call_args.args[1:],
+                         ("browser", self.WINDOW, "next_tab", None))
+        with patch.object(self.service, "request_capture", return_value=True) as capture:
+            session.receive(session.token, "browser", "Próxima aba.")
+        capture.assert_called_once_with(start_timeout=6.0)
+
+    def test_frase_solta_na_escuta_nao_insiste(self):
+        self.finish_command()
+        self.event(State.LISTENING)
+        with patch.object(self.service, "request_capture", return_value=True) as capture:
+            self.event(State.RESULT, "e aí, tudo certo com você")
+        capture.assert_not_called()
+        self.assertIn("Diga Hey Jarvis", self.controller.text)
+
+    def test_desligado_nas_configuracoes(self):
+        self.controller.preferences.save({"continuous_mode": False}, [])
+        capture = self.finish_command()
+        capture.assert_not_called()
+
+    def test_tempo_configuravel(self):
+        self.controller.preferences.save({"continuous_seconds": 10.0}, [])
+        self.finish_command().assert_called_once_with(start_timeout=10.0)
+
+    def test_atalho_executado_tambem_abre_a_escuta(self):
+        with patch.object(self.service, "request_capture", return_value=True) as capture:
+            self.controller.shortcuts.succeeded.emit()
+        capture.assert_called_once_with(start_timeout=6.0)
+
+    def test_botao_encerra_a_escuta(self):
+        self.finish_command()
+        self.controller.toggle()
+        self.assertFalse(self.controller._follow_up)
+
+    def test_ajustes_por_voz(self):
+        self.assertEqual(settings_command("ativar modo contínuo"), ("continuous_mode", True))
+        self.assertEqual(settings_command("desativar modo contínuo"), ("continuous_mode", False))
+        self.assertEqual(settings_command("tempo do modo contínuo 8 segundos"), ("continuous_seconds", 8.0))
+
+    def test_preferencia_validada(self):
+        from speakbar.preferences import validate_preferences
+        self.assertTrue(validate_preferences({})["continuous_mode"])
+        for bad in ({"continuous_seconds": 1}, {"continuous_seconds": 25}, {"continuous_mode": "sim"}):
+            with self.assertRaises(ValueError):
+                validate_preferences(bad)
+
+
 class SettingsVoiceTest(ControllerFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()

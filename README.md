@@ -93,9 +93,9 @@ python main.py --headless            # reconhecimento e resultado no terminal
 python -m speakbar --demo            # demonstração sem microfone, modelos ou API
 ```
 
-`python main.py --demo` também abre a demonstração. Para usar apenas a demonstração,
-basta instalar `speakbar/requirements.txt`; para apenas o terminal, basta
-`wakeword/requirements.txt`. O requirements da raiz referencia ambos, sem duplicá-los.
+`python main.py --demo` também abre a demonstração. Todas as dependências do host
+ficam no `requirements.txt` da raiz, separadas por parte (wake word, barra e acesso à
+tela); as do pyobjc e do uiautomation só são instaladas no sistema delas.
 Não execute simultaneamente duas instâncias reais que disputem o mesmo microfone.
 O serviço `realtime` atende uma conexão de reconhecimento por vez.
 
@@ -225,6 +225,20 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   apenas soam como eles, como “Polar texto” ou “Impar campo”, trocas comuns da transcrição.
   Isso só vale quando nenhum outro comando se encaixa e quando um único comando soa parecido;
   as ações que alteram o texto continuam pedindo confirmação.
+- **Navegador** (macOS; Chrome, Safari, Firefox, Edge, Brave, Arc, Opera e Vivaldi): com o
+  navegador na frente, diga **“nova aba”**, **“fechar aba”**, **“reabrir aba”**,
+  **“próxima aba”**, **“aba anterior”**, **“ir para a aba 3”** (de 1 a 8), **“última aba”**,
+  **“voltar página”**, **“avançar página”** ou **“recarregar página”**. São atalhos que todos
+  esses navegadores têm, executados direto, sem confirmação; para desfazer um “fechar aba”,
+  diga “reabrir aba”. Com outro aplicativo na frente o Jarvis não aperta nada, porque o
+  Cmd+W fecharia uma janela ou um documento. Voltar e avançar usam o menu do próprio
+  navegador, então funcionam em qualquer idioma, no teclado ABNT2 e com um campo de texto em foco.
+- **Modo contínuo**: depois de um comando que deu certo (uma aba aberta, um texto colado, um
+  atalho, um aplicativo aberto…), o Jarvis já fica ouvindo o próximo por alguns segundos, sem
+  precisar de “Hey Jarvis”: “abrir Chrome”, “nova aba”, “próxima aba”… Se ninguém falar, ele
+  volta em silêncio a esperar o “Hey Jarvis”; uma frase que não é comando também não gera
+  insistência. Liga e desliga em Configurações → Voz e microfone (padrão: ligado, 6 segundos),
+  ou por voz com as configurações abertas: “desativar modo contínuo”, “tempo do modo contínuo 8 segundos”.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens

@@ -1,3 +1,17 @@
--r wakeword/requirements.txt
--r speakbar/requirements.txt
--r screen_access/requirements.txt
+# Dependências do host (o que roda fora do Docker). Os serviços do Docker têm as suas em api/ e worker/.
+
+# Wake word, microfone e conexão com a transcrição (wakeword/)
+pyaudio>=0.2.14,<0.3
+openwakeword==0.6.0
+onnxruntime>=1.17,<2
+numpy>=1.26,<3
+requests>=2.31,<3
+websockets>=14,<16
+
+# Barra e configurações (speakbar/)
+PySide6>=6.8,<7
+
+# Acesso à tela (screen_access/): cada sistema instala só o seu
+pyobjc-framework-ApplicationServices>=12,<13; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=12,<13; sys_platform == "darwin"
+uiautomation>=2,<3; sys_platform == "win32"

@@ -37,11 +37,18 @@ class Choice:
     candidates: tuple = ()  # posições dos itens possíveis, quando "ambiguous"
 
 
+def plain_text(text):
+    """Minúsculas e sem acentos, mantendo espaços e pontuação. Base de toda comparação de frases."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
 def tokenize(text):
-    """Minúsculas, sem acentos nem pontuação, separado em palavras."""
-    decomposed = unicodedata.normalize("NFKD", text.lower().replace("ç", "s"))
-    plain = "".join(char for char in decomposed if not unicodedata.combining(char))
-    return re.findall(r"[a-z0-9]+", plain)
+    """Minúsculas, sem acentos nem pontuação, separado em palavras.
+
+    O "ç" vira "s", que é como soa: a comparação aqui é pela pronúncia.
+    """
+    return re.findall(r"[a-z0-9]+", plain_text(text.casefold().replace("ç", "s")))
 
 
 def sound_key(word):

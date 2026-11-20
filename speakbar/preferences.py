@@ -14,6 +14,7 @@ def defaults():
                 start_timeout=speech.start_timeout, max_seconds=speech.max_seconds,
                 detection_threshold=float(os.getenv("DETECTION_THRESHOLD", "0.3")),
                 text_size=18, number_size=12, high_contrast=False, remember_position=True,
+                continuous_mode=True, continuous_seconds=6.0,
                 position=None, max_depth=int(os.getenv("SCREEN_MAX_DEPTH", "32")),
                 max_elements=int(os.getenv("SCREEN_MAX_ELEMENTS", "3000")))
 
@@ -33,9 +34,12 @@ def validate_preferences(values):
                                    ("max_depth", 0, 2147483647), ("max_elements", 1, 10000)):
         if type(result[key]) is not int or not minimum <= result[key] <= maximum:
             raise ValueError(f"Valor inválido: {key}.")
-    for key in ("remember_position", "high_contrast"):
+    for key in ("remember_position", "high_contrast", "continuous_mode"):
         if type(result[key]) is not bool:
             raise ValueError("Preferência de aparência inválida.")
+    seconds = result["continuous_seconds"]
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 2 <= seconds <= 20:
+        raise ValueError("O tempo do modo contínuo deve ficar entre 2 e 20 segundos.")
     microphone = result["microphone"]
     if microphone is not None and (not isinstance(microphone, dict) or set(microphone) != {"name", "api"}
                                   or not all(isinstance(v, str) and v.strip() for v in microphone.values())):

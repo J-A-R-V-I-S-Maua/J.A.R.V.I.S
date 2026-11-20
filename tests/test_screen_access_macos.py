@@ -9,7 +9,6 @@ from unittest.mock import Mock, patch
 class MacOSBackendTest(unittest.TestCase):
     def test_scan_focus_press_and_permission_failure(self):
         macos = ModuleType("screen_access.macos")
-        permissions = ModuleType("screen_access.permissions")
         services = ModuleType("ApplicationServices")
         macos.frontmost_application = Mock(return_value=(99999, "Teste"))
         macos.front_window = Mock(return_value="window")
@@ -27,12 +26,12 @@ class MacOSBackendTest(unittest.TestCase):
         macos.is_visible = Mock(return_value=True)
         macos.press = Mock(return_value=0)
         macos.describe_error = Mock(return_value="recusado")
-        permissions.has_accessibility_permission = Mock(return_value=True)
+        macos.has_accessibility_permission = Mock(return_value=True)
         services.AXUIElementIsAttributeSettable = Mock(return_value=(0, True))
         services.AXUIElementSetAttributeValue = Mock(return_value=0)
         # Evitar que a importação simulada permaneça como backend real no processo.
         sys.modules.pop("screen_access.macos_backend", None)
-        with patch.dict(sys.modules, {"screen_access.macos": macos, "screen_access.permissions": permissions,
+        with patch.dict(sys.modules, {"screen_access.macos": macos,
                                      "ApplicationServices": services}):
             module = importlib.import_module("screen_access.macos_backend")
             with module.MacOSBackend() as backend:
@@ -46,7 +45,7 @@ class MacOSBackendTest(unittest.TestCase):
                 macos.is_visible.return_value = False
                 with self.assertRaises(module.ScreenError):
                     backend.activate(snapshot, 1)
-            permissions.has_accessibility_permission.return_value = False
+            macos.has_accessibility_permission.return_value = False
             with self.assertRaises(module.ScreenError):
                 with module.MacOSBackend():
                     pass

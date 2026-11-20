@@ -68,6 +68,28 @@ class Base(unittest.TestCase):
             self.conversation.handle(phrase)
 
 
+class BrowserPhraseTest(Base):
+    def test_abrir_nova_aba_fica_para_o_navegador(self):
+        self.assertFalse(self.conversation.handle("abrir nova aba"))
+        self.assertEqual(self.messages, [])
+
+
+class SucceededTest(Base):
+    CONFIRM = False
+
+    def test_avisa_quando_o_aplicativo_foi_aberto(self):
+        done = []
+        self.conversation.succeeded.connect(lambda: done.append(1))
+        self.conversation.handle("abrir Safari")
+        self.wait_for_message("solicitada ao sistema")
+        for _ in range(100):  # o aviso sai da thread logo depois da mensagem
+            APP.processEvents()
+            if done:
+                break
+            time.sleep(0.01)
+        self.assertEqual(done, [1])
+
+
 class ConfirmationTest(Base):
     """Padrão: como no controle da tela, nada é aberto sem a pessoa confirmar."""
 

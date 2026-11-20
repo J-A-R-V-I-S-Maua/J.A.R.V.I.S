@@ -77,6 +77,8 @@ class ScreenExecutor:
                             result = getattr(backend, kind)(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "select_text":
                             result = backend.select_text(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
+                        elif kind == "browser":
+                            result = backend.browser(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "mission_control":
                             result = backend.mission_control(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "prepare_dictation":
@@ -102,7 +104,7 @@ class ScreenExecutor:
                                 "Controle indisponível. Verifique a janela e suas permissões.")
                             self.emit(token, "error", message)
         except Exception as exc:
-            message = str(exc) if isinstance(exc, ScreenError) else "Acesso à tela indisponível. Instale screen_access/requirements.txt."
+            message = str(exc) if isinstance(exc, ScreenError) else "Acesso à tela indisponível. Instale as dependências com pip install -r requirements.txt."
             self.emit(0, "unavailable", message)
         finally:
             self.emit(0, "stopped", None)

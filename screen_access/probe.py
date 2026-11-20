@@ -204,7 +204,6 @@ def probe_process(target, max_depth, max_elements):
 
 def main() -> int:
     from . import macos
-    from .permissions import has_accessibility_permission
 
     parser = argparse.ArgumentParser(description="Mostra o que cada controle visível oferece.")
     parser.add_argument("--delay", type=int, default=5, help="segundos para trocar para o aplicativo alvo")
@@ -215,7 +214,7 @@ def main() -> int:
         help="front: janela em foco; dock: o Dock; desktop: o Finder (ícones da mesa e janelas dele)")
     args = parser.parse_args()
 
-    if not has_accessibility_permission():
+    if not macos.has_accessibility_permission():
         print("Sem permissão de Acessibilidade. Veja Ajustes do Sistema > Privacidade e Segurança.")
         return 1
     if args.target != "front":

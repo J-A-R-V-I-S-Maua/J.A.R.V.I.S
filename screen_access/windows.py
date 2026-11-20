@@ -1,10 +1,118 @@
 """Microsoft UI Automation, sem simulação de cliques por coordenadas."""
+import ctypes
+from ctypes import wintypes
 import sys
 import os
 import uuid
 from .backend import Backend, Element, Snapshot, ScreenError, Window, intersection
-from .shell import DESKTOP_CLASSES, TASKBAR_CLASSES
 from .scroll import WindowsScrollMixin
+
+# --- Win32: hosts do desktop e barras de tarefas, sem percorrer outros aplicativos ----------------
+
+DESKTOP_CLASSES = ("Progman", "WorkerW", "#32769")
+TASKBAR_CLASSES = ("Shell_TrayWnd", "Shell_SecondaryTrayWnd")
+
+
+def shell_handles():
+    user32 = ctypes.windll.user32
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, callback_type, wintypes.LPARAM]
+    desktops, taskbars = [], []
+
+    def class_name(hwnd):
+        buffer = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, buffer, len(buffer))
+        return buffer.value
+
+    def collect(hwnd, data):
+        name = class_name(hwnd)
+        if name in TASKBAR_CLASSES:
+            taskbars.append(hwnd)
+        elif name in DESKTOP_CLASSES[:2]:
+            # Windows pode aninhar SHELLDLL_DefView sob um WorkerW intermediário.
+            found = []
+
+            def child(child_hwnd, unused):
+                if class_name(child_hwnd) == "SHELLDLL_DefView":
+                    found.append(child_hwnd)
+                return True
+
+            child_callback = callback_type(child)
+            user32.EnumChildWindows(hwnd, child_callback, 0)
+            if found:
+                desktops.append(hwnd)
+        return True
+
+    callback = callback_type(collect)
+    user32.EnumWindows(callback, 0)
+    return tuple(desktops), tuple(taskbars)
+
+
+# --- Win32: histórico de foco; os callbacks guardam só HWNDs, nunca objetos UIA -----------------
+
+class ForegroundTracker:
+    def __init__(self):
+        self.handle = None
+        self.user32 = ctypes.windll.user32
+        callback_type = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
+                                          wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+
+        def changed(hook, event, window, object_id, child_id, thread, timestamp):
+            if window:
+                self.handle = window
+
+        self.callback = callback_type(changed)
+        self.user32.SetWinEventHook.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE,
+                                               callback_type, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+        self.user32.SetWinEventHook.restype = wintypes.HANDLE
+        self.user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+        # EVENT_SYSTEM_FOREGROUND, OUTOFCONTEXT | SKIPOWNPROCESS.
+        self.hook = self.user32.SetWinEventHook(3, 3, None, self.callback, 0, 0, 2)
+        if not self.hook:
+            raise ScreenError("Não foi possível acompanhar a janela em foco.")
+
+    def pump(self):
+        message = wintypes.MSG()
+        while self.user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+            self.user32.TranslateMessage(ctypes.byref(message))
+            self.user32.DispatchMessageW(ctypes.byref(message))
+
+    def close(self):
+        if self.hook:
+            self.user32.UnhookWinEvent(self.hook)
+            self.hook = None
+
+
+# --- Inserção Unicode literal no cursor, sem interpretar atalhos nem usar a área de transferência -
+
+def send_literal_text(text, allowed=lambda: True):
+    import time
+    import uiautomation as api
+
+    if not text or any(ord(char) < 32 for char in text):
+        raise ScreenError("O texto deve conter uma frase sem teclas de controle.")
+    send = ctypes.windll.user32.SendInput
+    send.argtypes = [ctypes.c_uint, ctypes.POINTER(api.INPUT), ctypes.c_int]
+    send.restype = ctypes.c_uint
+    for char in text:
+        if not allowed():
+            raise ScreenError("Digitação interrompida. Confira o texto já inserido antes de repetir.")
+        encoded = char.encode("utf-16-le")
+        events = []
+        for offset in range(0, len(encoded), 2):
+            unit = int.from_bytes(encoded[offset:offset+2], "little")
+            events.append(api.KeyboardInput(0, unit, api.KeyboardEventFlag.KeyUnicode))
+            events.append(api.KeyboardInput(0, unit, api.KeyboardEventFlag.KeyUnicode | api.KeyboardEventFlag.KeyUp))
+        inputs = (api.INPUT * len(events))(*events)
+        sent = send(len(events), inputs, ctypes.sizeof(api.INPUT))
+        if sent != len(events):
+            raise ScreenError("O Windows não inseriu todo o texto. Confira o campo antes de repetir.")
+        # Alguns provedores (Qt inclusive) processam pares substitutos separadamente
+        # dos caracteres BMP; dar tempo ao destino preserva a ordem da frase.
+        time.sleep(0.01)
 
 
 class WindowsBackend(WindowsScrollMixin, Backend):
@@ -27,7 +135,6 @@ class WindowsBackend(WindowsScrollMixin, Backend):
         self.context = self.api.UIAutomationInitializerInThread()
         self.context.__enter__()
         if self.native:
-            from .foreground import ForegroundTracker
             try:
                 self.tracker = ForegroundTracker()
             except Exception:
@@ -70,7 +177,6 @@ class WindowsBackend(WindowsScrollMixin, Backend):
         if not self.native:
             return [control for control in self.api.GetRootControl().GetChildren()
                     if control.ClassName in DESKTOP_CLASSES[:2] + TASKBAR_CLASSES]
-        from .shell import shell_handles
         desktops, taskbars = shell_handles()
         controls = []
         for hwnd in desktops + taskbars:
@@ -300,7 +406,6 @@ class WindowsBackend(WindowsScrollMixin, Backend):
 
     def dictate(self, snapshot, text, cancelled=lambda: False):
         control = self._focus_editable(snapshot, cancelled)
-        from .typing import send_literal_text
         identity = tuple(control.GetRuntimeId())
 
         def allowed():

@@ -18,7 +18,7 @@ import sys
 
 if __name__ == "__main__":
     # Rodado por caminho, o Python põe a pasta do script no sys.path, e o
-    # screen_access/typing.py do projeto esconderia o módulo typing da stdlib.
+    # um módulo do projeto com nome de um da stdlib (já houve um typing.py) esconderia o original.
     _here = os.path.dirname(os.path.abspath(__file__))
     sys.path[:] = [p for p in sys.path if os.path.abspath(p or os.getcwd()) != _here]
 

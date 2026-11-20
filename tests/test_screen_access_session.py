@@ -513,6 +513,11 @@ class SoundAlikeFieldCommandTest(unittest.TestCase):
             self.assertEqual(field_command(phrase), action, phrase)
         for phrase in ("Blood.", "Comandos.", "Ode.", "previsão do tempo", "clicar", "Conte-se."):
             self.assertIsNone(field_command(phrase), phrase)
+        # Com os comandos do navegador na disputa, as mesmas trocas continuam reconhecidas.
+        from screen_access.commands import SPOKEN_COMMANDS
+        for phrase, action in (("Polar texto.", "paste_text"), ("Calar aqui.", "paste_text"),
+                               ("Deletor.", "clear_text"), ("Impar campo.", "clear_text")):
+            self.assertEqual(field_command(phrase, SPOKEN_COMMANDS), action, phrase)
 
     def test_vira_o_comando_mas_ainda_pede_confirmacao(self):
         self.assertTrue(self.session.handle("Polar texto."))
@@ -528,6 +533,74 @@ class SoundAlikeFieldCommandTest(unittest.TestCase):
         self.session.begin_capture()
         self.session.handle("digitar polar texto")  # e o ditado continua literal
         self.assertEqual(self.session.dictation_text, "polar texto")
+
+class BrowserSessionTest(unittest.TestCase):
+    WINDOW = Window("chrome-1", 777, "Google Chrome", (0, 0, 1200, 800))
+
+    def setUp(self):
+        self.executor = Mock()
+        self.views = []
+        self.session = ScreenSession(self.executor, self.views.append)
+        self.session.receive(0, "foreground", self.WINDOW)
+        self.session.begin_capture()
+
+    def test_vocabulario(self):
+        from screen_access.commands import browser_command
+
+        for phrase, expected in (("Nova aba.", ("new_tab", None)), ("Feche a aba!", ("close_tab", None)),
+                                 ("reabrir aba", ("reopen_tab", None)), ("Próxima aba", ("next_tab", None)),
+                                 ("aba anterior", ("previous_tab", None)), ("Voltar página.", ("back", None)),
+                                 ("avançar página", ("forward", None)), ("Recarregar a página", ("reload", None)),
+                                 ("ir para a aba três", ("tab", 3)), ("aba 2", ("tab", 2)),
+                                 ("última aba", ("last_tab", None))):
+            self.assertEqual(browser_command(phrase), expected, phrase)
+        for phrase in ("aba nove", "aba", "voltar", "nova", "abrir Safari", "role para baixo"):
+            self.assertIsNone(browser_command(phrase), phrase)
+
+    def test_respostas_com_voltar_nao_cancelam(self):
+        self.assertIsNone(classify_reply("voltar página"))
+
+    def test_vai_direto_ao_navegador_e_conta_como_concluido(self):
+        self.assertTrue(self.session.handle("Fechar a aba"))
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("browser", self.WINDOW, "close_tab", None))
+        self.assertEqual(self.session.state, ActionState.EXECUTING)
+        self.session.receive(self.session.token, "browser", "Aba fechada.")
+        self.assertFalse(self.session.active)
+        self.assertEqual(self.views[-1].text, "Aba fechada.")
+        self.assertTrue(self.views[-1].done)  # o modo contínuo pode ouvir o próximo comando
+
+    def test_numero_da_aba(self):
+        self.session.handle("ir para a aba 4")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("browser", self.WINDOW, "tab", 4))
+
+    def test_erro_e_cancelamento_nao_contam_como_concluido(self):
+        self.session.handle("nova aba")
+        self.session.receive(self.session.token, "error", "Comandos de aba e página só funcionam com o navegador na frente.")
+        self.assertFalse(self.views[-1].done)
+        self.session.begin_capture()
+        self.session.handle("nova aba")
+        self.session.cancel()
+        self.assertFalse(self.views[-1].done)
+
+    def test_interrompe_a_continuacao_da_rolagem(self):
+        self.session.state = ActionState.SCROLL_WAITING
+        self.session.scroll_request = object()
+        self.session.handle("próxima aba")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("browser", self.WINDOW, "next_tab", None))
+
+    def test_sem_janela_nao_envia(self):
+        self.session.target = None
+        self.session.handle("nova aba")
+        self.executor.submit.assert_not_called()
+
+    def test_parada_a_janela_nova_vira_o_alvo(self):
+        # "Abrir Chrome" e logo "nova aba": o Chrome chega à frente enquanto o Jarvis ouve.
+        chrome = Window("chrome-2", 778, "Nova aba", (0, 0, 1200, 800))
+        self.session.receive(0, "foreground", chrome)
+        self.assertEqual(self.session.target, chrome)
+        self.session.handle("nova aba")
+        self.assertEqual(self.executor.submit.call_args.args[2], chrome)
+
 
 if __name__ == "__main__":
     unittest.main()

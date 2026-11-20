@@ -168,6 +168,9 @@ class Backend:
     def mission_control(self, opened, cancelled=lambda: False):
         raise ScreenError("Mostrar janelas está disponível somente no macOS nesta versão.")
 
+    def browser(self, window, action, number=None, cancelled=lambda: False):
+        raise ScreenError("Comandos de aba e página estão disponíveis somente no macOS nesta versão.")
+
     def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
         raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
 

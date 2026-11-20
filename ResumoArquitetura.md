@@ -1,7 +1,7 @@
 # Arquitetura atual do J.A.R.V.I.S.
 
 O aplicativo auxilia pessoas com dificuldades motoras a controlar o computador por
-voz. A experiência atual prioriza Windows e português brasileiro, com feedback
+voz, em português brasileiro, no Windows, no macOS e no Linux, com feedback
 somente textual. Este documento descreve o que está implementado; a evolução
 planejada aparece ao final.
 
@@ -15,10 +15,11 @@ planejada aparece ao final.
    ajuda, atalhos ou comandos de tela. O texto ditado permanece literal.
 5. A interface separa estado operacional de mensagem e orientação. Silêncio,
    transcrição vazia e frase desconhecida recebem feedback e uma nova captura.
-6. Cliques, digitação, Enter e limpeza exigem confirmação e revalidam seus alvos.
-   Rolagem e atalhos explicitamente solicitados executam diretamente.
-7. O resultado permanece visível; a disponibilidade para uma nova ativação é
-   indicada separadamente quando microfone e reconhecimento estão prontos.
+6. Cliques, digitação, Enter, limpeza, recortar e colar exigem confirmação e revalidam
+   seus alvos. Rolagem, atalhos, selecionar, copiar, comandos de navegador e a escolha de
+   uma janela no Mission Control executam diretamente.
+7. O resultado permanece visível. No modo contínuo, um comando concluído abre uma escuta
+   curta para o próximo, sem wake word; silêncio volta ao "Hey Jarvis" sem erro.
 
 ## Componentes e responsabilidades
 
@@ -26,13 +27,19 @@ planejada aparece ao final.
 |---|---|---|
 | `wakeword` | Host | Microfone, wake word, VAD, transporte e eventos tipados |
 | `speakbar.interaction` | Host | Contexto de diálogo, roteamento e repetição de comandos desconhecidos |
-| `speakbar.commands` | Host | Vocabulário, normalização de comandos, ajuda e números dos ajustes |
+| `speakbar.commands` | Host | Vocabulário da barra, ajuda e números dos ajustes (normaliza com `matching`) |
 | Controladores Qt | Host | Ponte entre serviços, sessão e apresentação; agendamento de capturas |
 | Speakbar e configurações | Host | Estado e orientação visíveis; edição de rascunho e persistência explícita |
 | `screen_access` | Host | Sessão de escolha/confirmação, acompanhamento de foco e ações nativas |
+| `screen_access.windows` | Host | UI Automation e o Win32 de apoio (foco, área de trabalho, digitação) |
+| `screen_access.macos*` | Host | AX API (`macos`), mesa/Dock/Mission Control/menus (`macos_shell`) e o backend |
+| `screen_access.linux` | Host | AT-SPI; teclas por xdotool/ydotool (`keys`) e números por layer-shell (`overlay`) |
+| `screen_access.matching` | Host | Normalização de texto comum a todo o projeto e escolha por semelhança sonora |
 | API FastAPI | Docker | Proxy WebSocket e endpoints legados de transcrição em lote |
 | `realtime` | Docker | Whisper small, aquecimento e uma conexão de reconhecimento por vez |
 | Worker, Beat e Redis | Docker | Processamento e limpeza dos uploads do modo em lote |
+
+As dependências do host ficam todas no `requirements.txt` da raiz, com marcadores por sistema.
 
 A correspondência de nomes de controles mantém seu tratamento fonético próprio.
 Os módulos de diálogo não dependem de widgets. As referências nativas COM/AX e
@@ -67,7 +74,8 @@ motivos, identificadores e durações, sem texto reconhecido ou ditado.
 
 ## Configurações e dados
 
-A rolagem vertical no Windows utiliza `ScrollPattern`, preservando o alvo na thread
+A rolagem vertical utiliza `ScrollPattern` no Windows e a barra de rolagem AX no macOS (com a
+roda do mouse contínua como alternativa no Chrome e em apps Electron), preservando o alvo na thread
 do executor. A região rolável mais próxima do foco é priorizada; ambiguidades são
 resolvidas por números. Os movimentos pequeno, normal e página usam aproximadamente
 15%, 50% e 90% do viewport, ou o incremento nativo quando essas métricas não existem.
@@ -106,15 +114,16 @@ O modo headless continua voltado à transcrição no terminal, usando o ambiente
 
 ## Limitações e evolução futura
 
-- O controle nativo utiliza UI Automation no Windows; o contrato macOS tem
-  implementação e testes simulados. No Linux, acesso à tela não está implementado.
+- O controle nativo usa UI Automation no Windows, a AX API no macOS (validada em um Mac real)
+  e AT-SPI no Linux. Mission Control, seleção de texto, copiar/recortar/colar e os comandos
+  de navegador existem só no macOS por enquanto.
 - Aplicativos sem controles acessíveis ou com privilégios diferentes podem recusar
   operações. Não há fallback por coordenadas ou visão computacional.
 - “Parar” por voz depende da captura e transcrição. O botão cancela a interação
   local imediatamente; uma ação nativa já enviada pode terminar depois disso.
 - Criação completa de atalhos e seleção de microfone por voz ficam para outra etapa.
-- LLM, comandos compostos, rolagem contínua/horizontal, gerenciamento de janelas, envio guiado de e-mails,
-  TTS e reconhecimento independente de emergência não fazem parte desta entrega.
+- LLM, comandos compostos, rolagem horizontal, envio guiado de e-mails, TTS e
+  reconhecimento independente de emergência não fazem parte desta entrega.
 
 ## Validação
 

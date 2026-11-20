@@ -4,6 +4,7 @@ import time
 from AppKit import (NSApplicationActivateIgnoringOtherApps, NSPasteboard, NSPasteboardTypeString, NSRunningApplication,
                     NSWorkspace)
 from ApplicationServices import (
+    AXIsProcessTrusted,
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
     AXUIElementCreateApplication,
@@ -41,6 +42,8 @@ from Quartz import (
     CGPoint,
     CGWindowListCopyWindowInfo,
     kCGEventFlagMaskCommand,
+    kCGEventFlagMaskControl,
+    kCGEventFlagMaskShift,
     kCGHIDEventTap,
     kCGNullWindowID,
     kCGScrollWheelEventIsContinuous,
@@ -48,6 +51,14 @@ from Quartz import (
     kCGWindowListExcludeDesktopElements,
     kCGWindowListOptionOnScreenOnly,
 )
+
+
+def has_accessibility_permission():
+    """Diz se o programa foi autorizado a ler a árvore de acessibilidade.
+
+    Não abre nenhuma janela do sistema: apenas consulta o estado atual.
+    """
+    return bool(AXIsProcessTrusted())
 
 
 def read_attribute(element, name):
@@ -67,6 +78,12 @@ def frontmost_application():
     pid = keyboard_pid()
     app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
     return pid, app.localizedName() if app is not None else ""
+
+
+def bundle_id(pid):
+    """Identificador do aplicativo de um processo (ex.: com.google.Chrome), ou None."""
+    application = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+    return application.bundleIdentifier() if application is not None else None
 
 
 def pid_for_bundle(bundle_id):
@@ -210,7 +227,13 @@ KEY_C = 8
 KEY_V = 9
 KEY_RETURN = 36
 KEY_DELETE = 51  # apagar para trás (Backspace)
+KEY_T, KEY_W, KEY_R = 17, 13, 15
+KEY_TAB = 48
+KEY_LEFT, KEY_RIGHT = 123, 124
+KEY_DIGITS = {1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25}  # a fileira de cima
 COMMAND = kCGEventFlagMaskCommand
+SHIFT = kCGEventFlagMaskShift
+CONTROL = kCGEventFlagMaskControl
 
 KEY_PAUSE = 0.01  # dá tempo ao aplicativo de processar cada letra na ordem
 

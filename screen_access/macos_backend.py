@@ -6,10 +6,27 @@ import uuid
 from . import macos, macos_shell
 from .backend import Backend, Element, ScreenError, Snapshot, Window
 from .matching import find_in_text, last_word
-from .permissions import has_accessibility_permission
 from .scroll import SCROLL_DURATIONS, SCROLL_FRAME_SECONDS, ScrollMixin, ScrollOutcome, ScrollTargets
 from ApplicationServices import AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue
 
+# Navegadores conhecidos: Cmd+W em outro aplicativo fecharia uma janela ou um documento.
+BROWSERS = frozenset({
+    "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary", "org.chromium.Chromium",
+    "com.apple.Safari", "com.apple.SafariTechnologyPreview", "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition", "com.microsoft.edgemac", "com.brave.Browser",
+    "company.thebrowser.Browser", "com.operasoftware.Opera", "com.vivaldi.Vivaldi",
+})
+BROWSER_DONE = {
+    "new_tab": "Nova aba aberta.", "close_tab": "Aba fechada. Diga reabrir aba para trazê-la de volta.",
+    "reopen_tab": "Aba reaberta.", "next_tab": "Próxima aba.", "previous_tab": "Aba anterior.",
+    "last_tab": "Última aba.", "back": "Página anterior.", "forward": "Próxima página.",
+    "reload": "Página recarregada.",
+}
+BROWSER_UNAVAILABLE = {
+    "back": "Não há página anterior nesta aba.", "forward": "Não há próxima página nesta aba.",
+    "reopen_tab": "Não há aba fechada para reabrir.", "next_tab": "Só há uma aba aberta.",
+    "previous_tab": "Só há uma aba aberta.",
+}
 DESKTOP_PREFIX = "desktop:"
 MISSION_CONTROL_PREFIX = "missioncontrol:"
 FIELD_NAME_LIMIT = 60
@@ -82,7 +99,7 @@ class MacOSBackend(ScrollMixin, Backend):
         self.paste_preview = None
 
     def __enter__(self):
-        if not has_accessibility_permission():
+        if not macos.has_accessibility_permission():
             raise ScreenError("Autorize Acessibilidade em Ajustes do Sistema > Privacidade e Segurança.")
         return self
 
@@ -255,6 +272,49 @@ class MacOSBackend(ScrollMixin, Backend):
         if window is None:
             raise ScreenError("O Mission Control foi fechado.")
         return window
+
+    # --- Navegador ------------------------------------------------------------------------------
+
+    def browser(self, window, action, number=None, cancelled=lambda: False):
+        """Abas e páginas do navegador da frente, pelos atalhos que todos os navegadores do Mac têm."""
+        if cancelled():
+            raise ScreenError("Ação cancelada antes da execução.")
+        if (window is None or self.is_desktop(window) or self.is_mission_control(window)
+                or macos.bundle_id(window.pid) not in BROWSERS):
+            raise ScreenError("Comandos de aba e página só funcionam com o navegador na frente.")
+        current = self.foreground()
+        if current is None or current.pid != window.pid or macos.keyboard_pid() != window.pid:
+            raise ScreenError("O navegador saiu da frente. Clique nele e repita o comando.")
+        if action == "tab":
+            if number not in range(1, 9):
+                raise ScreenError("Diga uma aba de 1 a 8, ou última aba.")
+            macos.press_key(macos.KEY_DIGITS[number], macos.COMMAND)
+            return f"Aba {number}."
+        # (atalho no menu, modificadores AX, tecla para quando o menu não tem o item)
+        shortcuts = {
+            "new_tab": ("T", 0, (macos.KEY_T, macos.COMMAND)),
+            "close_tab": ("W", 0, (macos.KEY_W, macos.COMMAND)),
+            "reopen_tab": ("T", 1, (macos.KEY_T, macos.COMMAND | macos.SHIFT)),
+            "reload": ("R", 0, (macos.KEY_R, macos.COMMAND)),
+            "back": ("[", 0, (macos.KEY_LEFT, macos.COMMAND)),
+            "forward": ("]", 0, (macos.KEY_RIGHT, macos.COMMAND)),
+            "next_tab": ("\t", 12, (macos.KEY_TAB, macos.CONTROL)),
+            "previous_tab": ("\t", 13, (macos.KEY_TAB, macos.CONTROL | macos.SHIFT)),
+            "last_tab": (None, None, (macos.KEY_DIGITS[9], macos.COMMAND)),
+        }
+        if action not in shortcuts:
+            raise ScreenError("Comando de navegador desconhecido.")
+        char, modifiers, key = shortcuts[action]
+        # Pelo menu do navegador sempre que ele tiver o item: com o navegador na frente, o menu
+        # mostra o que dá para fazer agora (sem histórico, "Voltar" fica desativado).
+        item = macos_shell.menu_item_with_shortcut(window.pid, char, modifiers) if char else None
+        if item is not None:
+            if not macos.read_attribute(item, "AXEnabled"):
+                raise ScreenError(BROWSER_UNAVAILABLE.get(action, "O navegador não permite isso agora."))
+            if macos.press(item) == 0:
+                return BROWSER_DONE[action]
+        macos.press_key(*key)
+        return BROWSER_DONE[action]
 
     # --- Digitação no campo ativo -------------------------------------------------------------
 

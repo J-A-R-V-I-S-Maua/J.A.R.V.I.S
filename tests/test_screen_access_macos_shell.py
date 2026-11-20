@@ -85,9 +85,8 @@ class Environment:
         macos.press = Mock(return_value=0)
         macos.perform_action = Mock(return_value=0)
         macos.describe_error = Mock(return_value="recusado")
+        macos.has_accessibility_permission = Mock(return_value=True)
         self.macos = macos
-        permissions = ModuleType("screen_access.permissions")
-        permissions.has_accessibility_permission = Mock(return_value=True)
         services = ModuleType("ApplicationServices")
         services.AXUIElementIsAttributeSettable = Mock(return_value=(0, True))
         services.AXUIElementSetAttributeValue = Mock(return_value=0)
@@ -103,10 +102,9 @@ class Environment:
         forget()
         case.addCleanup(forget)
         for patcher in (
-            patch.dict(sys.modules, {"screen_access.macos": macos, "screen_access.permissions": permissions,
+            patch.dict(sys.modules, {"screen_access.macos": macos,
                                      "ApplicationServices": services}),
             patch.object(screen_access, "macos", macos, create=True),
-            patch.object(screen_access, "permissions", permissions, create=True),
         ):
             patcher.start()
             case.addCleanup(patcher.stop)
@@ -427,6 +425,88 @@ class MissionControlToggleTest(unittest.TestCase):
         env = Environment(self, dock_running=False)
         with self.assertRaisesRegex(env.module.ScreenError, "Dock"):
             env.backend.mission_control(True)
+
+
+class BrowserTest(unittest.TestCase):
+    def environment(self, bundle="com.google.Chrome", keyboard=None):
+        env = Environment(self, frontmost=OTHER, front="window")
+        macos = env.macos
+        macos.bundle_id = lambda pid: bundle
+        macos.keyboard_pid = lambda: OTHER if keyboard is None else keyboard
+        macos.press_key = Mock()
+        macos.KEY_T, macos.KEY_W, macos.KEY_R, macos.KEY_TAB = 17, 13, 15, 48
+        macos.KEY_LEFT, macos.KEY_RIGHT = 123, 124
+        macos.KEY_DIGITS = {n: 17 + n for n in range(1, 10)}
+        macos.COMMAND, macos.SHIFT, macos.CONTROL = 1, 2, 4
+        macos.application_element = lambda pid: "chromeapp"  # sem barra de menus até menu() montar uma
+        env.window = env.backend.foreground()
+        return env
+
+    def menu(self, env, char="[", enabled=True):
+        env.roles["mbar"], env.children["mbar"] = "AXMenuBar", ("historico",)
+        env.children["historico"] = ("menu",)
+        env.children["menu"] = ("voltar",)
+        env.attrs[("voltar", "AXMenuItemCmdChar")] = char
+        env.attrs[("voltar", "AXMenuItemCmdModifiers")] = 0
+        env.attrs[("voltar", "AXEnabled")] = enabled
+        env.attrs[("chromeapp", "AXMenuBar")] = "mbar"
+
+    def test_atalhos_de_aba(self):
+        env = self.environment()
+        for action, keys in (("new_tab", (17, 1)), ("close_tab", (13, 1)), ("reopen_tab", (17, 3)),
+                             ("reload", (15, 1)), ("next_tab", (48, 4)), ("previous_tab", (48, 6)),
+                             ("last_tab", (26, 1))):
+            env.macos.press_key.reset_mock()
+            env.backend.browser(env.window, action)
+            env.macos.press_key.assert_called_once_with(*keys)
+        env.macos.press_key.reset_mock()
+        self.assertEqual(env.backend.browser(env.window, "tab", 3), "Aba 3.")
+        env.macos.press_key.assert_called_once_with(20, 1)
+
+    def test_voltar_usa_o_menu_do_navegador(self):
+        # Pelo atalho do item, não pelo nome: vale em qualquer idioma e com o teclado ABNT2.
+        env = self.environment()
+        self.menu(env)
+        self.assertEqual(env.backend.browser(env.window, "back"), "Página anterior.")
+        env.macos.press.assert_called_once_with("voltar")
+        env.macos.press_key.assert_not_called()
+
+    def test_item_desativado_avisa_e_nao_aperta_nada(self):
+        env = self.environment()
+        self.menu(env, enabled=False)  # aba sem histórico
+        with self.assertRaisesRegex(env.module.ScreenError, "Não há página anterior"):
+            env.backend.browser(env.window, "back")
+        env.macos.press.assert_not_called()
+        env.macos.press_key.assert_not_called()
+
+    def test_outros_comandos_tambem_passam_pelo_menu(self):
+        env = self.environment()
+        self.menu(env, char="T")
+        self.assertEqual(env.backend.browser(env.window, "new_tab"), "Nova aba aberta.")
+        env.macos.press.assert_called_once_with("voltar")  # o item do menu montado no teste
+        env.macos.press_key.assert_not_called()
+
+    def test_sem_o_item_no_menu_usa_cmd_seta(self):
+        env = self.environment()
+        env.backend.browser(env.window, "forward")
+        env.macos.press_key.assert_called_once_with(124, 1)
+
+    def test_fora_de_um_navegador_nao_aperta_nada(self):
+        env = self.environment(bundle="com.apple.TextEdit")  # Cmd+W fecharia o documento
+        with self.assertRaisesRegex(env.module.ScreenError, "navegador na frente"):
+            env.backend.browser(env.window, "close_tab")
+        env.macos.press_key.assert_not_called()
+
+    def test_navegador_sem_o_teclado_nao_aperta_nada(self):
+        env = self.environment(keyboard=12345)
+        with self.assertRaisesRegex(env.module.ScreenError, "saiu da frente"):
+            env.backend.browser(env.window, "new_tab")
+        env.macos.press_key.assert_not_called()
+
+    def test_aba_fora_do_intervalo(self):
+        env = self.environment()
+        with self.assertRaises(env.module.ScreenError):
+            env.backend.browser(env.window, "tab", 9)
 
 
 class ScrollTest(unittest.TestCase):

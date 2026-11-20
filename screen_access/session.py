@@ -4,10 +4,13 @@ from enum import Enum
 import re
 import time
 from .commands import (
+    BROWSER_ACTIONS,
     CANCEL,
     CONFIRM,
     FIELD_COMMANDS,
+    SPOKEN_COMMANDS,
     action_command,
+    browser_command,
     field_command,
     normalized,
     parse_number,
@@ -47,6 +50,7 @@ class ActionView:
     markers: tuple = ()
     capture: bool = False
     state: ActionState = ActionState.IDLE
+    done: bool = False  # um comando acabou de dar certo: o modo contínuo pode ouvir o próximo
 
 
 class ScreenSession:
@@ -98,12 +102,12 @@ class ScreenSession:
     def active(self):
         return self.state is not ActionState.IDLE
 
-    def view(self, text, elements=(), capture=False):
+    def view(self, text, elements=(), capture=False, done=False):
         if self.state is not self._step:
             self._step = self.state
             self.retry_count = 0
             self.deadline = time.monotonic() + (90 if self.state in (ActionState.EXECUTING, ActionState.SCROLLING) else 30) if self.active else None
-        self.publish(ActionView(text, tuple(elements), capture, self.state))
+        self.publish(ActionView(text, tuple(elements), capture, self.state, done))
 
     def retry(self, text):
         if self.retry_count or (self.deadline is not None and time.monotonic() >= self.deadline):
@@ -132,7 +136,11 @@ class ScreenSession:
         if not self.active:
             self.target = self.last_window
 
-    def cancel(self, text="Ação cancelada."):
+    def finish(self, text):
+        """Fim de um comando que deu certo (diferente de cancelar ou de um erro)."""
+        self.cancel(text, done=True)
+
+    def cancel(self, text="Ação cancelada.", done=False):
         self.token += 1
         self.executor.cancel()
         self.state = ActionState.IDLE
@@ -146,7 +154,7 @@ class ScreenSession:
         self.selection = None
         self.choosing_window = False
         self._reset_scroll()
-        self.view(text)
+        self.view(text, done=done)
 
     def _start_scroll(self, request):
         if self.unavailable:
@@ -180,6 +188,18 @@ class ScreenSession:
         self.view("Mostrando as janelas…" if opened else "Fechando as janelas…")
         self.executor.submit(self.token, "mission_control", opened)
 
+    def _browser(self, action, number):
+        if self.unavailable:
+            self.view(self.unavailable)
+            return
+        if self.target is None:
+            self.view("Deixe o navegador na frente e repita o comando.")
+            return
+        self.state = ActionState.EXECUTING
+        self.token += 1
+        self.view("Enviando ao navegador…")
+        self.executor.submit(self.token, "browser", self.target, action, number)
+
     def _scroll_prompt(self):
         return self.scroll_message + " Diga mais, para cima, para baixo ou parar."
 
@@ -188,6 +208,11 @@ class ScreenSession:
             self.last_window = data
             if self.target and (data.identity, data.pid, data.frame) != (
                     self.target.identity, self.target.pid, self.target.frame):
+                if not self.active:
+                    # Nada foi perguntado ainda (ex.: o app que acabou de abrir veio para a frente
+                    # enquanto o Jarvis ouvia): o comando vale para a janela que está na frente.
+                    self.target = data
+                    return
                 self.cancel("A janela mudou. Diga mostrar números para ler novamente.")
             return
         if kind == "unavailable":
@@ -274,18 +299,18 @@ class ScreenSession:
             name = self.snapshot.elements[0].name or "campo ativo"
             self.view(f"Colar “{preview}” em {name}? Diga confirmar ou cancelar.", capture=True)
         elif kind == "dictate":
-            self.cancel("Texto inserido no campo.")
+            self.finish("Texto inserido no campo.")
         elif kind == "clear_text":
-            self.cancel("Conteúdo do campo apagado.")
+            self.finish("Conteúdo do campo apagado.")
         elif kind == "press_enter":
-            self.cancel("Enter enviado ao campo.")
-        elif kind in ("select_text", "copy_text", "cut_text", "paste_text"):
-            self.cancel(data)
+            self.finish("Enter enviado ao campo.")
+        elif kind in ("select_text", "copy_text", "cut_text", "paste_text", "browser"):
+            self.finish(data)
         elif kind in ("activate", "open_item", "context_menu"):
-            self.cancel("Janela escolhida." if self.choosing_window else "Pedido aceito pelo aplicativo.")
+            self.finish("Janela escolhida." if self.choosing_window else "Pedido aceito pelo aplicativo.")
         elif kind == "mission_control":
             if not data:
-                self.cancel("Janelas fechadas.")
+                self.finish("Janelas fechadas.")
                 return
             # Os números já aparecem e o Jarvis fica ouvindo: basta dizer o número, sem "Hey Jarvis".
             self.target = data
@@ -399,7 +424,9 @@ class ScreenSession:
             return True
         if self.state is ActionState.SCROLL_WAITING:
             # Comandos de tela explícitos podem substituir a continuação.
-            if action_command(text) or phrase in FIELD_COMMANDS or phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"} or re.match(r"^\s*digitar\b", text, re.IGNORECASE):
+            if (action_command(text) or phrase in FIELD_COMMANDS or browser_command(text)
+                    or phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"}
+                    or re.match(r"^\s*digitar\b", text, re.IGNORECASE)):
                 target = self.target
                 self.cancel("")
                 self.target = target
@@ -430,9 +457,18 @@ class ScreenSession:
         # O texto ditado preserva acentos, caixa e pontuação da transcrição final.
         dictation = re.match(r"^\s*digitar\b[\s,:;.!?]*(.*)$", text, re.IGNORECASE)
         show = phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"}
-        if not show and target is None and dictation is None and field_action is None:
-            # Último recurso: uma frase que soa como um comando de campo ("Polar texto" por "colar texto").
-            field_action = field_command(text) if command is None else None
+        undecided = not show and command is None and dictation is None and field_action is None
+        browser = browser_command(text) if undecided else None
+        if undecided and browser is None:
+            # Último recurso: uma frase que soa como um comando ("Polar texto" por "colar texto").
+            guess = field_command(text, SPOKEN_COMMANDS)
+            if guess in BROWSER_ACTIONS:
+                browser = guess, None
+            else:
+                field_action = guess
+        if browser is not None:
+            self._browser(*browser)
+            return True
         if not show and target is None and dictation is None and field_action is None:
             return False
         if command and not target:
