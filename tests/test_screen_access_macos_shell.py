@@ -315,6 +315,86 @@ class ChromiumWaitTest(unittest.TestCase):
             self.assertEqual(self.macos.text_inside("row"), "Ela Partiu – Tim Maia – Racional")
 
 
+class ContextMenuTest(unittest.TestCase):
+    """Menu de contexto como lido no Finder real: pendurado na lista, alternativas no mesmo lugar."""
+
+    def setUp(self):
+        self.env = env = Environment(self, frontmost=FINDER, front="window")
+        env.macos.ACTION_ROLES = {"AXButton", "AXMenuItem"}
+        env.macos.KEY_ESCAPE = 53
+        env.macos.press_key = Mock()
+        env.macos.walk_with_clip = lambda root, depth, clip: iter([(0, root, clip), (1, "file", clip)])
+        env.roles["file"], env.names["file"], env.frames["file"] = "AXButton", "Downloads", (110, 140, 200, 20)
+        env.actions["file"] = ("AXPress", "AXShowMenu")
+        env.attrs[("file", "AXEnabled")] = True
+        env.children["window"] = ("windowarea", "file")
+        parents = {"file": "window", "ctx": "window"}
+        env.macos.parent = lambda element: parents.get(element)
+        env.macos.perform_action = Mock(side_effect=self.open_menu)
+        items = (("open", "Abrir em Nova Aba", 387), ("alt", "Abrir em Nova Janela", 387), ("sep", "", 411),
+                 ("info", "Obter Informações", 422), ("inspector", "Mostrar Inspetor", 422),
+                 ("off", "Desativada", 446))
+        for element, name, y in items:
+            env.roles[element], env.names[element], env.frames[element] = "AXMenuItem", name, (594, y, 233, 24)
+            env.actions[element] = ("AXPress",)
+            env.attrs[(element, "AXEnabled")] = element not in ("sep", "off")
+        env.roles["ctx"], env.frames["ctx"] = "AXMenu", (594, 382, 233, 378)
+        env.children["ctx"] = tuple(element for element, _, _ in items)
+        self.threads = patch.object(env.module.threading, "Thread", side_effect=self.run_now)
+        self.threads.start()
+        self.addCleanup(self.threads.stop)
+
+    def run_now(self, target, args, **kwargs):
+        target(*args)
+        return Mock()
+
+    def open_menu(self, element, action):
+        self.env.children["window"] = ("windowarea", "file", "ctx")  # o macOS pendura o menu na janela
+        return -25204  # o AXShowMenu "falha" por tempo, com o menu aberto
+
+    def open(self):
+        backend = self.env.backend
+        snapshot = backend.scan(backend.foreground())
+        return backend, backend.context_menu(snapshot, 1)
+
+    def test_abre_e_o_menu_vira_a_janela_da_frente(self):
+        backend, menu = self.open()
+        self.env.macos.perform_action.assert_called_once_with("file", "AXShowMenu")
+        self.assertEqual((menu.identity, menu.title), (f"menu:{FINDER}", "Menu de contexto"))
+        self.assertEqual(backend.foreground(), menu)
+
+    def test_numera_so_as_opcoes_visiveis(self):
+        backend, menu = self.open()
+        names = [e.name for e in backend.scan(menu).elements]
+        self.assertEqual(names, ["Abrir em Nova Aba", "Obter Informações"])
+
+    def test_escolher_uma_opcao(self):
+        backend, menu = self.open()
+        options = backend.scan(menu)
+        backend.activate(options, 2)
+        self.env.macos.press.assert_called_once_with("info")
+
+    def test_menu_fechado_tem_tamanho_zero(self):
+        backend, menu = self.open()
+        self.env.frames["ctx"] = (0, 956, 0, 0)
+        self.assertIsNone(backend.menu_window())
+        self.assertEqual(backend.foreground().title, "Documentos")
+
+    def test_cancelar_fecha_com_esc_so_se_estiver_aberto(self):
+        backend, menu = self.open()
+        backend.close_menu()
+        self.env.macos.press_key.assert_called_once_with(53)
+        self.env.macos.press_key.reset_mock()
+        backend.close_menu()
+        self.env.macos.press_key.assert_not_called()
+
+    def test_sem_menu_avisa(self):
+        self.env.macos.perform_action = Mock(return_value=-25204)  # nada abriu
+        with patch.object(self.env.module, "MENU_WAIT", 0.1):
+            with self.assertRaisesRegex(self.env.module.ScreenError, "não abriu"):
+                self.open()
+
+
 class ActionTest(unittest.TestCase):
     def setUp(self):
         self.env = Environment(self)

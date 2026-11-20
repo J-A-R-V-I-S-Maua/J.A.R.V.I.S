@@ -231,6 +231,7 @@ KEY_RETURN = 36
 KEY_DELETE = 51  # apagar para trás (Backspace)
 KEY_T, KEY_W, KEY_R = 17, 13, 15
 KEY_TAB = 48
+KEY_ESCAPE = 53
 KEY_LEFT, KEY_RIGHT = 123, 124
 KEY_DIGITS = {1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25}  # a fileira de cima
 COMMAND = kCGEventFlagMaskCommand

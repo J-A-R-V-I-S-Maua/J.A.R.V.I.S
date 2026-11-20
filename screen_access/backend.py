@@ -141,6 +141,9 @@ class Backend:
     def context_menu(self, snapshot, number, cancelled=lambda: False):
         raise ScreenError("Menu de contexto indisponível neste sistema.")
 
+    def close_menu(self, cancelled=lambda: False):
+        """Fecha um menu de contexto aberto pelo Jarvis; sem nada aberto, não faz nada."""
+
     def dictate(self, snapshot, text, cancelled=lambda: False):
         raise ScreenError("Digitação no campo ativo indisponível neste sistema.")
 

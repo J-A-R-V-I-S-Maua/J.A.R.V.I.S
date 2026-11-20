@@ -74,6 +74,7 @@ class ScreenSession:
         self.selection = None  # ("all"|"last_word"|"text", trecho) enquanto o campo é procurado
         # Janelas do Mission Control: o número escolhido vai direto, sem pedir confirmação.
         self.choosing_window = False
+        self.choosing_menu = False  # as opções de um menu de contexto aberto estão numeradas
         self.retry_count = 0
         self.deadline = None
         self._step = self.state
@@ -141,8 +142,12 @@ class ScreenSession:
         self.cancel(text, done=True)
 
     def cancel(self, text="Ação cancelada.", done=False):
+        menu_open = self.choosing_menu
         self.token += 1
         self.executor.cancel()
+        if menu_open:
+            # Sem escolher nada, o menu não fica aberto na tela (depois de uma escolha ele já fechou).
+            self.executor.submit(self.token, "close_menu")
         self.state = ActionState.IDLE
         self.snapshot = None
         self.candidates = ()
@@ -153,6 +158,7 @@ class ScreenSession:
         self.pending_action = "activate"
         self.selection = None
         self.choosing_window = False
+        self.choosing_menu = False
         self._reset_scroll()
         self.view(text, done=done)
 
@@ -266,7 +272,9 @@ class ScreenSession:
                 self.state = ActionState.CHOOSING
                 self.candidates = tuple(element.number for element in data.elements)
                 limit = " Lista parcial: limite atingido ou ramo inacessível." if data.truncated else ""
-                ask = "Diga o número da janela ou cancelar." if self.choosing_window else "Diga o número do controle ou cancelar."
+                ask = ("Diga o número da janela ou cancelar." if self.choosing_window else
+                       "Diga o número da opção do menu ou cancelar." if self.choosing_menu else
+                       "Diga o número do controle ou cancelar.")
                 self.view(ask + limit, data.elements, True)
             else:
                 self.select(self.pending_phrase)
@@ -306,6 +314,16 @@ class ScreenSession:
             self.finish("Enter enviado ao campo.")
         elif kind in ("select_text", "copy_text", "cut_text", "paste_text", "browser"):
             self.finish(data)
+        elif kind == "context_menu" and data:
+            # macOS: o menu abriu e voltou como janela; as opções já aparecem numeradas.
+            self.target = data
+            self.choosing_menu = True
+            self.pending_action = "activate"
+            self.pending_phrase = None
+            self.state = ActionState.READING
+            self.token += 1
+            self.view("Lendo as opções do menu…")
+            self.executor.submit(self.token, "scan", data, self.max_depth, self.max_elements, False)
         elif kind in ("activate", "open_item", "context_menu"):
             self.finish("Janela escolhida." if self.choosing_window else "Pedido aceito pelo aplicativo.")
         elif kind == "mission_control":

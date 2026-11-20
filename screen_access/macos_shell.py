@@ -133,3 +133,38 @@ def menu_item_with_shortcut(pid, char, modifiers=0):
                         return item
                     found = found or item
     return found
+
+
+def menu_near(element, levels=15):
+    """O menu (AXMenu) aberto mais perto do elemento, subindo pelos ancestrais, ou None.
+
+    O menu de contexto não fica nos filhos do aplicativo: o macOS o pendura num ancestral do item
+    clicado (no Finder, na lista de arquivos). Subindo até o app, os dois casos são cobertos.
+    """
+    node = element
+    for _ in range(levels):
+        if node is None:
+            return None
+        for child in children(node):
+            if macos.element_role(child) == "AXMenu":
+                return child
+        node = macos.parent(node)
+    return None
+
+
+def menu_options(menu):
+    """As opções que aparecem no menu: sem separadores, sem opções desativadas e sem as alternativas.
+
+    As alternativas (as que surgem segurando Option, como "Mostrar Inspetor" no lugar de "Obter
+    Informações") ficam escondidas na mesma posição da opção visível; vale a primeira de cada lugar.
+    """
+    last = None
+    for item in children(menu):
+        if (macos.element_role(item) != "AXMenuItem" or not macos.element_name(item)
+                or not macos.read_attribute(item, "AXEnabled")):
+            continue
+        frame = macos.element_frame(item)
+        if frame is not None and frame == last:
+            continue
+        last = frame
+        yield item

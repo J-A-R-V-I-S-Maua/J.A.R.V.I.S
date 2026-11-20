@@ -183,6 +183,12 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   [atalho do Windows para o menu de contexto](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu).
   O aplicativo precisa oferecer o menu para esse controle. A ação não escolhe
   automaticamente nenhuma opção do menu.
+- **“Abrir menu de contexto de Downloads”** (macOS): abre o menu do clique direito pela
+  acessibilidade, sem mexer no mouse, e as opções já aparecem numeradas (“Obter Informações”,
+  “Comprimir”, “Copiar”…). Diga o número e **“confirmar”**; a confirmação continua porque há
+  opções como “Mover para o Lixo”. **“Cancelar”** fecha o menu. As alternativas que só surgem
+  segurando Option e as opções desativadas ficam de fora. Funciona no Finder e nos apps que
+  oferecem o menu de contexto pela acessibilidade.
 - Depois da escolha, a barra mostra **“Acionar [nome]? Diga confirmar ou cancelar”**
   e abre outra captura. Diga **“confirmar”** ou **“sim”** para acionar; **“cancelar”**,
   **“não”** ou **“parar”** para abandonar a proposta. Não é necessário repetir a wake word.
@@ -577,7 +583,8 @@ ao microfone para o terminal ou IDE nas configurações de privacidade do macOS.
 - **Finder**: arquivos e pastas da janela (abrem como no duplo clique), os atalhos da barra
   lateral (Recentes, Aplicativos, Downloads…), o caminho no rodapé, os triângulos que expandem
   uma pasta na lista (“Expandir Downloads” / “Recolher Downloads”) e os botões “Agrupar” e
-  “Ação”. Na visualização por ícones, os ícones também abrem.
+  “Ação”. Na visualização por ícones, os ícones também abrem. O menu de contexto de um
+  arquivo ou pasta abre com as opções numeradas.
 - **Spotify, Chrome e apps feitos com Electron** (como Docker Desktop e Cursor): o conteúdo
   da página, incluindo as linhas clicáveis das listas, como as playlists e as músicas do Spotify.
   Uma linha sem título ganha o nome dos textos dela (“Ela Partiu – Tim Maia”). Esses apps só
