@@ -572,6 +572,21 @@ python -m pip install -r requirements.txt
 Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Permita o acesso
 ao microfone para o terminal ou IDE nas configurações de privacidade do macOS.
 
+### O que recebe número em cada tipo de aplicativo (macOS)
+
+- **Finder**: arquivos e pastas da janela (abrem como no duplo clique), os atalhos da barra
+  lateral (Recentes, Aplicativos, Downloads…), o caminho no rodapé, os triângulos que expandem
+  uma pasta na lista (“Expandir Downloads” / “Recolher Downloads”) e os botões “Agrupar” e
+  “Ação”. Na visualização por ícones, os ícones também abrem.
+- **Spotify, Chrome e apps feitos com Electron** (como Docker Desktop e Cursor): o conteúdo
+  da página, incluindo as linhas clicáveis das listas, como as playlists e as músicas do Spotify.
+  Uma linha sem título ganha o nome dos textos dela (“Ela Partiu – Tim Maia”). Esses apps só
+  montam a árvore de acessibilidade depois que alguém pede e a desmontam quando ninguém a lê
+  por um tempo; por isso a leitura espera a página aparecer (cerca de 1 a 1,5 s, no máximo 3 s)
+  em vez de numerar uma janela quase vazia.
+- **Outros apps nativos**: botões, links, caixas de seleção, menus, campos de texto e itens
+  que se abrem com AXOpen.
+
 ## Linux
 
 Debian/Ubuntu com Python 3.11 disponível nos repositórios (por exemplo, Debian 12):

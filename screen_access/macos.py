@@ -1,10 +1,12 @@
 """Acesso à árvore de acessibilidade no macOS (AX API, via pyobjc)."""
+import re
 import time
 
 from AppKit import (NSApplicationActivateIgnoringOtherApps, NSPasteboard, NSPasteboardTypeString, NSRunningApplication,
                     NSWorkspace)
 from ApplicationServices import (
     AXIsProcessTrusted,
+    AXUIElementCopyAttributeNames,
     AXUIElementCopyAttributeValue,
     AXUIElementCopyActionNames,
     AXUIElementCreateApplication,
@@ -331,6 +333,9 @@ def describe_error(code):
 
 ACTION_ROLES = frozenset({
     "AXLink", "AXButton", "AXRadioButton", "AXCheckBox", "AXPopUpButton", "AXMenuItem",
+    # "Agrupar"/"Ação" do Finder, o triângulo que expande uma pasta na lista, e as linhas
+    # clicáveis das listas web (playlists e músicas do Spotify). Linhas do Finder não têm AXPress.
+    "AXMenuButton", "AXDisclosureTriangle", "AXRow",
 })
 TEXT_INPUT_ROLES = frozenset({"AXTextField", "AXTextArea", "AXComboBox"})
 
@@ -406,6 +411,65 @@ def is_visible(element, clip):
     if frame[2] < MIN_VISIBLE_SIZE or frame[3] < MIN_VISIBLE_SIZE:
         return False
     return intersect(frame, clip) is not None
+
+
+TEXT_ROLES = frozenset({"AXStaticText", "AXTextField", "AXHeading"})
+NUMBERS_ONLY = re.compile(r"^[\d\s:.,/-]+$")  # posição na lista, duração, data: não identificam o item
+
+
+def text_inside(element, skip=None, limit=3, max_nodes=60):
+    """Os primeiros textos dentro de um elemento, para dar nome a uma linha ou célula sem título.
+
+    Ex.: uma música do Spotify vira "Título – Artista – Álbum"; números soltos ficam de fora.
+    """
+    found = []
+    for count, (depth, node) in enumerate(walk(element, 6)):
+        if count >= max_nodes or len(found) >= limit:
+            break
+        if node is skip or (skip is not None and same_element(node, skip)):
+            continue
+        if element_role(node) in TEXT_ROLES:
+            value = read_attribute(node, kAXValueAttribute)
+            text = value.strip() if isinstance(value, str) and value.strip() else element_name(node)
+            if text and not NUMBERS_ONLY.match(text) and text not in found:
+                found.append(text)
+    return " – ".join(found)
+
+
+def is_chromium_window(window):
+    """Janela feita com Chromium (Chrome, Edge, Spotify, apps Electron)? A página vem dele."""
+    for child in read_attribute(window, kAXChildrenAttribute) or ():
+        error, names = AXUIElementCopyAttributeNames(child, None)
+        if error == kAXErrorSuccess and "ChromeAXNodeId" in (names or ()):
+            return True
+    return False
+
+
+def web_content_ready(window, max_nodes=400):
+    """A página (AXWebArea) já tem conteúdo? Uma árvore grande também conta como pronta."""
+    for count, (depth, element) in enumerate(walk(window, 40)):
+        if count >= max_nodes:
+            return True
+        if element_role(element) == "AXWebArea" and read_attribute(element, kAXChildrenAttribute):
+            return True
+    return False
+
+
+def wait_for_web_content(window, timeout=3.0):
+    """Espera o Chromium montar a árvore da página antes da leitura.
+
+    Ele só monta a árvore depois do pedido de acessibilidade e a desmonta quando ninguém a lê
+    por um tempo. No Spotify, medido: de 1 a 1,6 s. Sem esperar, a leitura sai quase vazia
+    (3 botões em vez de mais de 100 itens). Janelas que não são do Chromium passam direto.
+    """
+    if not is_chromium_window(window):
+        return True
+    deadline = time.monotonic() + timeout
+    while not web_content_ready(window):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.15)
+    return True
 
 
 def walk(element, max_depth, depth=0):

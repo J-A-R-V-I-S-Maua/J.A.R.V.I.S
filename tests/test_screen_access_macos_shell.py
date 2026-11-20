@@ -78,6 +78,10 @@ class Environment:
         macos.front_window = lambda pid: self.front  # no Finder, depois de clicar na mesa, é a própria mesa
         macos.window_title = lambda w: self.names.get(w, "")
         macos.enable_web_accessibility = Mock()
+        macos.wait_for_web_content = Mock(return_value=True)
+        macos.text_inside = Mock(return_value="")
+        macos.parent = Mock(return_value=None)
+        macos.action_names = getattr(macos, "action_names", None) or (lambda e: ("AXPress",))
         macos.can_press = lambda e: "AXPress" in self.actions.get(e, ())
         macos.is_visible = Mock(return_value=True)
         macos.TEXT_INPUT_ROLES = {"AXTextField"}
@@ -200,6 +204,115 @@ class ScanTest(unittest.TestCase):
         env.actions["img"] = ("AXOpen",)
         action = env.backend.describe("img", None)[3]
         self.assertEqual(action, "")  # AXImage fora da mesa não vira acionável
+
+
+class AppTreeTest(unittest.TestCase):
+    """Itens que a varredura deixava de fora no Finder e no Spotify (medido num Mac real)."""
+
+    def setUp(self):
+        self.env = Environment(self, front="window")
+        # Os mesmos papéis acionáveis do módulo de verdade.
+        self.env.macos.ACTION_ROLES = {"AXLink", "AXButton", "AXRadioButton", "AXCheckBox", "AXPopUpButton",
+                                       "AXMenuItem", "AXMenuButton", "AXDisclosureTriangle", "AXRow"}
+        self.env.macos.walk_with_clip = lambda root, depth, clip: iter([(0, root, clip)])
+
+    def describe(self, element, name, role, actions, **attrs):
+        env = self.env
+        env.roles[element], env.names[element], env.actions[element] = role, name, actions
+        env.frames[element] = (10, 10, 100, 20)
+        for key, value in attrs.items():
+            env.attrs[(element, key)] = value
+        return env.backend.describe(element, None)
+
+    def test_nome_de_arquivo_no_finder_abre_o_item(self):
+        # O campo do nome não aceita foco (seria renomear); ele declara AXOpen, que abre o item.
+        with patch.object(self.env.module, "AXUIElementIsAttributeSettable", Mock(return_value=(0, False))):
+            name, role, frame, action, visible, _ = self.describe(
+                "tf", "Downloads", "AXTextField", ("AXOpen", "AXShowMenu"), AXEnabled=True)
+        self.assertEqual((name, action), ("Downloads", "open"))
+
+    def test_barra_lateral_e_caminho_abrem(self):
+        self.assertEqual(self.describe("cell", "Aplicativos", "AXCell", ("AXOpen",))[3], "open")
+        self.assertEqual(self.describe("path", "Macintosh HD", "AXStaticText", ("AXOpen",))[3], "open")
+
+    def test_item_sem_nome_nao_entra(self):
+        self.assertEqual(self.describe("cell2", "", "AXCell", ("AXOpen",))[3], "")
+
+    def test_imagem_so_abre_dentro_do_finder(self):
+        self.env.backend.finder_walk = True  # visualização por ícones
+        self.assertEqual(self.describe("icon", "Relatório.pdf", "AXImage", ("AXOpen",))[3], "open")
+        self.env.backend.finder_walk = False
+        self.assertEqual(self.describe("icon", "Relatório.pdf", "AXImage", ("AXOpen",))[3], "")
+
+    def test_linha_sem_titulo_ganha_o_nome_dos_textos_de_dentro(self):
+        # Uma música do Spotify: AXRow clicável e sem título; os textos ficam nas células.
+        self.env.macos.text_inside = Mock(return_value="Ela Partiu – Tim Maia")
+        name, role, frame, action, visible, _ = self.describe("row", "", "AXRow", ("AXPress", "AXShowMenu"),
+                                                              AXEnabled=True)
+        self.assertEqual((name, action), ("Ela Partiu – Tim Maia", "press"))
+
+    def test_linha_sem_acao_continua_de_fora(self):
+        # Linhas do Finder não têm AXPress; quem entra é o nome do arquivo dentro delas.
+        self.assertEqual(self.describe("frow", "", "AXRow", ("AXShowDefaultUI",), AXEnabled=True)[3], "")
+
+    def test_triangulo_de_expandir_leva_o_nome_da_pasta(self):
+        self.env.macos.parent = Mock(return_value="cellx")
+        self.env.macos.text_inside = Mock(return_value="Downloads")
+        name = self.describe("tri", "", "AXDisclosureTriangle", ("AXPress",), AXEnabled=True, AXValue=0)[0]
+        self.assertEqual(name, "Expandir Downloads")
+        self.env.macos.text_inside.assert_called_with("cellx", skip="tri", limit=1)
+        self.env.attrs[("tri", "AXValue")] = 1
+        self.assertEqual(self.env.backend.describe("tri", None)[0], "Recolher Downloads")
+
+    def test_botoes_de_menu_do_finder(self):
+        self.assertEqual(self.describe("group", "Agrupar", "AXMenuButton", ("AXPress",), AXEnabled=True)[3], "press")
+
+    def test_leitura_espera_a_pagina_do_chromium(self):
+        self.env.backend.scan(self.env.backend.foreground())
+        self.env.macos.wait_for_web_content.assert_called_once_with("window")
+
+
+@unittest.skipUnless(sys.platform == "darwin", "usa o módulo macos de verdade")
+class ChromiumWaitTest(unittest.TestCase):
+    def setUp(self):
+        for name in ("screen_access.macos",):
+            sys.modules.pop(name, None)
+        self.macos = importlib.import_module("screen_access.macos")
+
+    def test_janela_que_nao_e_do_chromium_passa_direto(self):
+        with patch.object(self.macos, "is_chromium_window", return_value=False), \
+                patch.object(self.macos, "web_content_ready") as ready:
+            self.assertTrue(self.macos.wait_for_web_content("janela"))
+        ready.assert_not_called()
+
+    def test_espera_a_pagina_aparecer(self):
+        answers = iter([False, False, True])
+        with patch.object(self.macos, "is_chromium_window", return_value=True), \
+                patch.object(self.macos, "web_content_ready", side_effect=lambda w: next(answers)), \
+                patch.object(self.macos.time, "sleep") as nap:
+            self.assertTrue(self.macos.wait_for_web_content("janela"))
+        self.assertEqual(nap.call_count, 2)
+
+    def test_desiste_no_limite(self):
+        now = [0.0]
+        with patch.object(self.macos, "is_chromium_window", return_value=True), \
+                patch.object(self.macos, "web_content_ready", return_value=False), \
+                patch.object(self.macos.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(self.macos.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + s)):
+            self.assertFalse(self.macos.wait_for_web_content("janela", timeout=1.0))
+        self.assertLessEqual(now[0], 1.2)
+
+    def test_textos_de_dentro_sem_numeros_soltos(self):
+        tree = [(0, "row"), (1, "n"), (1, "title"), (1, "artist"), (1, "dup"), (1, "time"), (1, "album")]
+        roles = {"row": "AXRow", "n": "AXStaticText", "title": "AXStaticText", "artist": "AXStaticText",
+                 "dup": "AXStaticText", "time": "AXStaticText", "album": "AXStaticText"}
+        values = {"n": "1", "title": "Ela Partiu", "artist": "Tim Maia", "dup": "Tim Maia", "time": "3:21",
+                  "album": "Racional"}
+        with patch.object(self.macos, "walk", return_value=iter(tree)), \
+                patch.object(self.macos, "element_role", side_effect=lambda e: roles[e]), \
+                patch.object(self.macos, "read_attribute", side_effect=lambda e, a: values.get(e)), \
+                patch.object(self.macos, "same_element", side_effect=lambda a, b: a == b):
+            self.assertEqual(self.macos.text_inside("row"), "Ela Partiu – Tim Maia – Racional")
 
 
 class ActionTest(unittest.TestCase):

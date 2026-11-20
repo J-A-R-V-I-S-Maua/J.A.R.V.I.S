@@ -27,6 +27,10 @@ BROWSER_UNAVAILABLE = {
     "reopen_tab": "Não há aba fechada para reabrir.", "next_tab": "Só há uma aba aberta.",
     "previous_tab": "Só há uma aba aberta.",
 }
+# Papéis que abrem um item com AXOpen numa janela comum (o nome de um arquivo no Finder, a barra
+# lateral, o caminho). Imagens só contam no Finder (visualização por ícones): numa página, uma foto
+# com AXOpen não é um item para abrir.
+OPEN_ROLES = frozenset({"AXTextField", "AXCell", "AXStaticText", "AXRow"})
 DESKTOP_PREFIX = "desktop:"
 MISSION_CONTROL_PREFIX = "missioncontrol:"
 FIELD_NAME_LIMIT = 60
@@ -91,6 +95,7 @@ class MacOSBackend(ScrollMixin, Backend):
         super().__init__()
         # Controles da mesa e do Dock lidos na última varredura; só eles usam a classificação de shell.
         self.shell_elements = set()
+        self.finder_walk = False  # a última leitura foi de uma janela do Finder?
         # (identidade da janela, elemento): o campo de texto onde o cursor estava da última vez.
         self.last_field = None
         # (identidade da janela, elemento): o foco já analisado, para não refazer a conta a cada 0,2 s.
@@ -181,7 +186,9 @@ class MacOSBackend(ScrollMixin, Backend):
         if self.is_mission_control(window):
             yield from self._walk_mission_control(window)
             return
+        self.finder_walk = macos_shell.is_finder(window.pid)
         macos.enable_web_accessibility(window.pid)
+        macos.wait_for_web_content(self.root(window))
         if window.frame is None:
             for depth, element in macos.walk(self.root(window), max_depth):
                 yield depth, element, None
@@ -229,14 +236,37 @@ class MacOSBackend(ScrollMixin, Backend):
         if element in self.shell_elements:
             # Itens da mesa e do Dock não declaram AXEnabled; os separadores do Dock não têm nome.
             action = self.shell_action(element, role) if name else ""
-        elif enabled and role in macos.TEXT_INPUT_ROLES:
-            error, settable = AXUIElementIsAttributeSettable(element, "AXFocused", None)
-            if error == 0 and settable:
+        else:
+            actions = macos.action_names(element)
+            if enabled and role in macos.TEXT_INPUT_ROLES and self.focusable(element):
                 action = "focus"
-        elif enabled and role in macos.ACTION_ROLES and macos.can_press(element):
-            action = "press"
+            elif enabled and role in macos.ACTION_ROLES and "AXPress" in actions:
+                action = "press"
+            elif macos_shell.OPEN_ACTION in actions and (role in OPEN_ROLES or (role == "AXImage" and self.finder_walk)):
+                # Arquivos e pastas numa janela do Finder (o campo do nome), a barra lateral e o
+                # caminho: não são botões, mas declaram AXOpen, que abre o item como o duplo clique.
+                action = "open"
+            if action and not name:
+                name = self.derived_name(element, role)
+            if action == "open" and not name:
+                action = ""  # sem nome não dá para pedir nem conferir o que vai abrir
         visible = clip is None or macos.is_visible(element, clip)
         return (name, role, macos.element_frame(element), action, visible, element)
+
+    @staticmethod
+    def focusable(element):
+        error, settable = AXUIElementIsAttributeSettable(element, "AXFocused", None)
+        return error == 0 and bool(settable)
+
+    @staticmethod
+    def derived_name(element, role):
+        """Nome para um controle sem título, tirado do texto que está em volta dele."""
+        if role == "AXDisclosureTriangle":
+            # Na lista do Finder o triângulo fica na mesma célula que o nome do arquivo.
+            label = macos.text_inside(macos.parent(element), skip=element, limit=1)
+            verb = "Recolher" if macos.read_attribute(element, "AXValue") else "Expandir"
+            return f"{verb} {label}" if label else verb
+        return short_name(macos.text_inside(element))
 
     def perform(self, element, action):
         if action == "focus":
