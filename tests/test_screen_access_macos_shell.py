@@ -285,24 +285,31 @@ class ChromiumWaitTest(unittest.TestCase):
             self.assertTrue(self.macos.wait_for_web_content("janela"))
         size.assert_not_called()
 
-    def wait(self, sizes, **kwargs):
-        sizes = iter(sizes)
+    def wait(self, sizes, elapsed_per_nap=0.15, **kwargs):
+        sizes, now = iter(sizes), [0.0]
         with patch.object(self.macos, "is_chromium_window", return_value=True), \
                 patch.object(self.macos, "web_area_size", side_effect=lambda w: next(sizes)), \
-                patch.object(self.macos.time, "sleep") as nap:
+                patch.object(self.macos.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(self.macos.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + elapsed_per_nap)) as nap:
             return self.macos.wait_for_web_content("janela", **kwargs), nap.call_count
 
     def test_pagina_ja_montada_segue_na_hora(self):
         self.assertEqual(self.wait([1766]), (True, 0))  # o Chrome do dia a dia não fica mais lento
 
-    def test_arvore_desmontada_espera_parar_de_crescer(self):
+    def test_arvore_desmontada_espera_ficar_grande(self):
         # Medido no Spotify: o Chromium remonta a árvore em degraus; parar no 132 seria ler pela metade.
-        ready, naps = self.wait([19, 132, 388, 1766, 1766, 1766])
-        self.assertTrue(ready)
-        self.assertEqual(naps, 5)
+        ready, naps = self.wait([19, 132, 388, 1766])
+        self.assertEqual((ready, naps), (True, 3))
 
-    def test_pagina_pequena_que_parou_de_crescer_esta_pronta(self):
-        self.assertTrue(self.wait([12, 20, 20, 20])[0])
+    def test_esqueleto_parado_no_comeco_nao_engana(self):
+        # Como no YouTube: alguns décimos parado só com a busca, e depois a página inteira.
+        ready, naps = self.wait([5, 5, 5, 5, 5, 600])
+        self.assertEqual((ready, naps), (True, 5))
+
+    def test_pagina_pequena_que_parou_de_crescer_esta_pronta_depois_do_tempo_minimo(self):
+        ready, naps = self.wait([12] + [20] * 20)
+        self.assertTrue(ready)
+        self.assertEqual(naps, 8)  # 1,2 s: o tempo de uma remontagem
 
     def test_desiste_no_limite(self):
         now = [0.0]

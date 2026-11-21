@@ -454,27 +454,29 @@ def web_area_size(window, max_nodes=3000):
     return 0
 
 
-def wait_for_web_content(window, timeout=3.0, built=400, steady=3):
+def wait_for_web_content(window, timeout=3.0, built=400, steady=3, settle=1.2):
     """Espera o Chromium terminar de montar a árvore da página antes da leitura.
 
     Ele só monta a árvore depois do pedido de acessibilidade e a desmonta quando ninguém a lê
     por um tempo; aí ela volta crescendo (no Spotify, medido: 19, 132, 388 e 1766 elementos em
-    cerca de 1 s). Uma página grande na primeira olhada já estava montada e segue na hora; senão,
-    espera a contagem parar de crescer (três leituras iguais seguidas). Sem esperar, a leitura sai
-    quase vazia. Janelas que não são do Chromium passam direto.
+    cerca de 1 s). No começo ela pode ficar alguns décimos parada num esqueleto (no YouTube, só
+    a busca), então "parou de crescer" só vale depois de `settle` segundos. Uma página grande na
+    primeira olhada já estava montada e segue na hora. Janelas que não são do Chromium passam direto.
     """
     if not is_chromium_window(window):
         return True
     size = web_area_size(window)
     if size >= built:
         return True
-    deadline = time.monotonic() + timeout
+    began = time.monotonic()
     same = 0
-    while time.monotonic() < deadline:
+    while time.monotonic() - began < timeout:
         time.sleep(0.15)
         last, size = size, web_area_size(window)
+        if size >= built:
+            return True
         same = same + 1 if size and size == last else 0
-        if same >= steady - 1:
+        if same >= steady - 1 and time.monotonic() - began >= settle:
             return True
     return False
 
