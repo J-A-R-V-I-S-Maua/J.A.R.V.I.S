@@ -132,6 +132,7 @@ class KeepAboveDockTest(unittest.TestCase):
         appkit.NSWindowCollectionBehaviorCanJoinAllSpaces = 1
         appkit.NSWindowCollectionBehaviorMoveToActiveSpace = 2
         appkit.NSWindowCollectionBehaviorStationary = 16
+        appkit.NSWindowCollectionBehaviorFullScreenAuxiliary = 256
         return objc, appkit
 
     def run_on(self, platform, window, adjust=keep_above_dock, qt_platform="cocoa"):
@@ -175,7 +176,7 @@ class KeepAboveDockTest(unittest.TestCase):
     def test_janela_estacionaria_continua_por_cima_do_mission_control(self):
         window = Mock(collectionBehavior=Mock(return_value=2 | 64))  # Qt: "mesa ativa" e outra marca qualquer
         self.run_on("darwin", window, stay_in_mission_control)
-        window.setCollectionBehavior_.assert_called_once_with(64 | 16 | 1)
+        window.setCollectionBehavior_.assert_called_once_with(64 | 16 | 1 | 256)  # 256: sobre tela cheia
 
     def test_sem_plataforma_cocoa_nada_toca_no_objc(self):
         # Com "offscreen" (os testes), converter o winId derrubaria o processo.
@@ -187,10 +188,12 @@ class KeepAboveDockTest(unittest.TestCase):
     def test_speakbar_tambem_continua_visivel_no_mission_control(self):
         from speakbar.window import Speakbar
 
-        with patch("speakbar.overlay.stay_in_mission_control") as stays:
+        with patch("speakbar.overlay.stay_in_mission_control") as stays, \
+                patch("speakbar.overlay.keep_above_dock") as raised:
             bar = Speakbar(demo=True)
             bar.show()
             stays.assert_called_with(bar)
+            raised.assert_called_with(bar)  # no Tahoe o Mission Control cobre a camada comum
             bar.close()
             bar.deleteLater()
 

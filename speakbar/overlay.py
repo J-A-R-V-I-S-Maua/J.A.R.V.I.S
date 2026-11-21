@@ -82,19 +82,22 @@ def keep_above_dock(widget):
 
 
 def stay_in_mission_control(widget):
-    """Janela "estacionária": continua por cima quando o Mission Control abre, em vez de virar
-    miniatura, e aparece em todas as mesas. Verificado num Mac real; a camada sozinha não basta."""
+    """Janela "estacionária": não vira miniatura quando o Mission Control abre, aparece em todas
+    as mesas e também por cima de apps em tela cheia. Nas versões antigas do macOS isto bastava
+    para continuar à vista no Mission Control; no Tahoe ele é desenhado nas camadas 14 a 19, então
+    a barra também precisa de keep_above_dock. Verificado nos dois sistemas."""
     try:
         window = native_window(widget)
         if window is not None:
-            from AppKit import (NSWindowCollectionBehaviorCanJoinAllSpaces, NSWindowCollectionBehaviorMoveToActiveSpace,
-                                NSWindowCollectionBehaviorStationary)
+            from AppKit import (NSWindowCollectionBehaviorCanJoinAllSpaces, NSWindowCollectionBehaviorFullScreenAuxiliary,
+                                NSWindowCollectionBehaviorMoveToActiveSpace, NSWindowCollectionBehaviorStationary)
 
             # O Qt marca janelas Tool como "mover para a mesa ativa", que o macOS não aceita junto
             # com "todas as mesas".
             behavior = window.collectionBehavior() & ~NSWindowCollectionBehaviorMoveToActiveSpace
             window.setCollectionBehavior_(behavior | NSWindowCollectionBehaviorStationary
-                                          | NSWindowCollectionBehaviorCanJoinAllSpaces)
+                                          | NSWindowCollectionBehaviorCanJoinAllSpaces
+                                          | NSWindowCollectionBehaviorFullScreenAuxiliary)
     except Exception:
         logging.debug("Não foi possível manter a janela visível no Mission Control", exc_info=True)
 

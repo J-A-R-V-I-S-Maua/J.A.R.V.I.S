@@ -446,31 +446,37 @@ def is_chromium_window(window):
     return False
 
 
-def web_content_ready(window, max_nodes=400):
-    """A página (AXWebArea) já tem conteúdo? Uma árvore grande também conta como pronta."""
-    for count, (depth, element) in enumerate(walk(window, 40)):
-        if count >= max_nodes:
-            return True
-        if element_role(element) == "AXWebArea" and read_attribute(element, kAXChildrenAttribute):
-            return True
-    return False
+def web_area_size(window, max_nodes=3000):
+    """Quantos elementos há dentro da página (AXWebArea), contando até max_nodes; 0 sem página."""
+    for depth, element in walk(window, 40):
+        if element_role(element) == "AXWebArea":
+            return sum(1 for _ in zip(range(max_nodes), walk(element, 40)))
+    return 0
 
 
-def wait_for_web_content(window, timeout=3.0):
-    """Espera o Chromium montar a árvore da página antes da leitura.
+def wait_for_web_content(window, timeout=3.0, built=400, steady=3):
+    """Espera o Chromium terminar de montar a árvore da página antes da leitura.
 
     Ele só monta a árvore depois do pedido de acessibilidade e a desmonta quando ninguém a lê
-    por um tempo. No Spotify, medido: de 1 a 1,6 s. Sem esperar, a leitura sai quase vazia
-    (3 botões em vez de mais de 100 itens). Janelas que não são do Chromium passam direto.
+    por um tempo; aí ela volta crescendo (no Spotify, medido: 19, 132, 388 e 1766 elementos em
+    cerca de 1 s). Uma página grande na primeira olhada já estava montada e segue na hora; senão,
+    espera a contagem parar de crescer (três leituras iguais seguidas). Sem esperar, a leitura sai
+    quase vazia. Janelas que não são do Chromium passam direto.
     """
     if not is_chromium_window(window):
         return True
+    size = web_area_size(window)
+    if size >= built:
+        return True
     deadline = time.monotonic() + timeout
-    while not web_content_ready(window):
-        if time.monotonic() >= deadline:
-            return False
+    same = 0
+    while time.monotonic() < deadline:
         time.sleep(0.15)
-    return True
+        last, size = size, web_area_size(window)
+        same = same + 1 if size and size == last else 0
+        if same >= steady - 1:
+            return True
+    return False
 
 
 def walk(element, max_depth, depth=0):

@@ -480,8 +480,11 @@ class Speakbar(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        from .overlay import stay_in_mission_control
-        stay_in_mission_control(self)  # as respostas continuam à vista com o Mission Control aberto
+        from .overlay import keep_above_dock, stay_in_mission_control
+        # As respostas continuam à vista com o Mission Control aberto (no Tahoe ele cobre a camada
+        # comum de "sempre no topo") e por cima de apps em tela cheia.
+        keep_above_dock(self)
+        stay_in_mission_control(self)
 
     def paintEvent(self, event):
         painter = QPainter(self)

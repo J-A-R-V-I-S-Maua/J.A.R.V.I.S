@@ -281,22 +281,34 @@ class ChromiumWaitTest(unittest.TestCase):
 
     def test_janela_que_nao_e_do_chromium_passa_direto(self):
         with patch.object(self.macos, "is_chromium_window", return_value=False), \
-                patch.object(self.macos, "web_content_ready") as ready:
+                patch.object(self.macos, "web_area_size") as size:
             self.assertTrue(self.macos.wait_for_web_content("janela"))
-        ready.assert_not_called()
+        size.assert_not_called()
 
-    def test_espera_a_pagina_aparecer(self):
-        answers = iter([False, False, True])
+    def wait(self, sizes, **kwargs):
+        sizes = iter(sizes)
         with patch.object(self.macos, "is_chromium_window", return_value=True), \
-                patch.object(self.macos, "web_content_ready", side_effect=lambda w: next(answers)), \
+                patch.object(self.macos, "web_area_size", side_effect=lambda w: next(sizes)), \
                 patch.object(self.macos.time, "sleep") as nap:
-            self.assertTrue(self.macos.wait_for_web_content("janela"))
-        self.assertEqual(nap.call_count, 2)
+            return self.macos.wait_for_web_content("janela", **kwargs), nap.call_count
+
+    def test_pagina_ja_montada_segue_na_hora(self):
+        self.assertEqual(self.wait([1766]), (True, 0))  # o Chrome do dia a dia não fica mais lento
+
+    def test_arvore_desmontada_espera_parar_de_crescer(self):
+        # Medido no Spotify: o Chromium remonta a árvore em degraus; parar no 132 seria ler pela metade.
+        ready, naps = self.wait([19, 132, 388, 1766, 1766, 1766])
+        self.assertTrue(ready)
+        self.assertEqual(naps, 5)
+
+    def test_pagina_pequena_que_parou_de_crescer_esta_pronta(self):
+        self.assertTrue(self.wait([12, 20, 20, 20])[0])
 
     def test_desiste_no_limite(self):
         now = [0.0]
+        counter = iter(range(1000))
         with patch.object(self.macos, "is_chromium_window", return_value=True), \
-                patch.object(self.macos, "web_content_ready", return_value=False), \
+                patch.object(self.macos, "web_area_size", side_effect=lambda w: next(counter)), \
                 patch.object(self.macos.time, "monotonic", side_effect=lambda: now[0]), \
                 patch.object(self.macos.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + s)):
             self.assertFalse(self.macos.wait_for_web_content("janela", timeout=1.0))
@@ -531,6 +543,74 @@ class MissionControlTest(unittest.TestCase):
         env.backend.last_field = ("app", "campo")
         env.backend.remember_focus(env.backend.foreground())
         self.assertEqual(env.backend.last_field, ("app", "campo"))
+
+
+class MissionControlTahoeTest(unittest.TestCase):
+    """No Tahoe quem desenha o Mission Control é o WindowManager, com uma tela por monitor.
+
+    A árvore espelha a lida num Mac real com dois monitores: as janelas ficam direto na
+    "mc.display" (sem "mc.windows") e o botão de adicionar mesa fica fora da lista.
+    """
+    MANAGER = 1064
+    MAIN, EXTERNAL = (0, 0, 1470, 956), (-1920, -124, 1920, 1080)
+
+    def setUp(self):
+        self.env = env = Environment(self, frontmost=OTHER, front="window")
+        tree = {
+            "disp1": ("AXGroup", "", self.MAIN, ("appstore", "chrome1", "spaces1"), "mc.display"),
+            "appstore": ("AXButton", "App Store", (830, 472, 622, 382), (), "com.apple.AppStore.space.1"),
+            "chrome1": ("AXButton", "Live – Chrome", (18, 213, 775, 487), (), "com.google.Chrome.space.1"),
+            "spaces1": ("AXGroup", "Barra do Spaces", (0, 0, 1470, 164), ("list1", "add1"), "mc.spaces"),
+            "list1": ("AXList", "", (0, 0, 1470, 164), ("mesa1",), "mc.spaces.list"),
+            "mesa1": ("AXButton", "Mesa 1", (735, 96, 168, 129), (), None),
+            "add1": ("AXButton", "Adicionar Mesa", (1539, 96, 138, 90), (), "mc.spaces.add"),
+            "disp2": ("AXGroup", "", self.EXTERNAL, ("docker", "spaces2"), "mc.display"),
+            "docker": ("AXButton", "Containers - Docker Desktop", (-1097, 70, 537, 300), (), "com.electron.dockerdesktop.space.10"),
+            "spaces2": ("AXGroup", "Barra do Spaces", (-1920, -124, 1920, 146), ("list2",), "mc.spaces"),
+            "list2": ("AXList", "", (-1920, -124, 1920, 146), ("mesa2",), "mc.spaces.list"),
+            "mesa2": ("AXButton", "Mesa 2", (-1056, -47, 190, 129), (), None),
+        }
+        for element, (role, name, frame, kids, identifier) in tree.items():
+            env.roles[element], env.names[element], env.frames[element] = role, name, frame
+            env.children[element] = kids
+            env.actions[element] = ("AXPress",) if role == "AXButton" else ()
+            if identifier:
+                env.attrs[(element, "AXIdentifier")] = identifier
+        self.opened(False)
+        bundles = {"com.apple.finder": FINDER, "com.apple.dock": DOCK, "com.apple.WindowManager": self.MANAGER}
+        env.macos.pid_for_bundle = lambda bundle: bundles.get(bundle)
+        env.macos.application_element = lambda pid: {FINDER: "finder", DOCK: "dock", self.MANAGER: "wm"}[pid]
+
+    def opened(self, value):
+        self.env.children["wm"] = ("disp1", "disp2") if value else ()
+
+    def test_aberto_cobre_os_dois_monitores(self):
+        self.opened(True)
+        window = self.env.backend.foreground()
+        self.assertEqual((window.identity, window.pid), (f"missioncontrol:{self.MANAGER}", self.MANAGER))
+        self.assertEqual(window.frame, (-1920, -124, 3390, 1080))
+
+    def test_numera_janelas_e_mesas_dos_dois_monitores(self):
+        self.opened(True)
+        snapshot = self.env.backend.scan(self.env.backend.foreground())
+        self.assertEqual([e.name for e in snapshot.elements],
+                         ["App Store", "Live – Chrome", "Mesa 1", "Containers - Docker Desktop", "Mesa 2"])
+        self.env.backend.activate(snapshot, 4)
+        self.env.macos.press.assert_called_once_with("docker")
+
+    def test_fechado_nao_e_a_janela_da_frente(self):
+        self.assertFalse(self.env.backend.foreground().identity.startswith("missioncontrol:"))
+
+    def test_mostrar_janelas_abre_e_espera_o_window_manager(self):
+        shell = self.env.module.macos_shell
+        with patch.object(shell.subprocess, "run", side_effect=lambda *a, **k: self.opened(True)) as run, \
+                patch.object(shell, "MISSION_CONTROL_WAIT", 0.05):
+            window = self.env.backend.mission_control(True)
+        run.assert_called_once()
+        self.assertEqual(window.pid, self.MANAGER)
+        with patch.object(shell.subprocess, "run", side_effect=lambda *a, **k: self.opened(False)), \
+                patch.object(shell, "MISSION_CONTROL_WAIT", 0.05):
+            self.assertIsNone(self.env.backend.mission_control(False))
 
 
 class MissionControlToggleTest(unittest.TestCase):

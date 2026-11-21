@@ -151,12 +151,12 @@ class MacOSBackend(ScrollMixin, Backend):
         return Window(f"{MENU_PREFIX}{pid}", pid, "Menu de contexto", frame)
 
     def mission_control_window(self):
-        dock_pid = macos.pid_for_bundle(macos_shell.DOCK)
-        root = macos_shell.mission_control(dock_pid)
-        frame = macos.element_frame(root) if root is not None else None
+        """O Mission Control aberto como uma "janela" que cobre todos os monitores, ou None."""
+        opened = macos_shell.mission_control()
+        frame = macos_shell.mission_control_frame(opened[1]) if opened is not None else None
         if frame is None:
             return None
-        return Window(f"{MISSION_CONTROL_PREFIX}{dock_pid}", dock_pid, "Mission Control", frame)
+        return Window(f"{MISSION_CONTROL_PREFIX}{opened[0]}", opened[0], "Mission Control", frame)
 
     def desktop_window(self, pid):
         roots = macos_shell.desktop_roots(pid)
@@ -191,10 +191,10 @@ class MacOSBackend(ScrollMixin, Backend):
                 raise ScreenError("O menu foi fechado.")
             return self.open_menu[1]
         if self.is_mission_control(window):
-            native = macos_shell.mission_control(window.pid)
-            if native is None:
+            opened = macos_shell.mission_control()
+            if opened is None or not opened[1]:
                 raise ScreenError("O Mission Control foi fechado.")
-            return native
+            return opened[1][0]
         native = macos.front_window(window.pid)
         if native is None or self.identity(window.pid, native) != window.identity:
             raise ScreenError("A janela mudou.")
@@ -204,8 +204,10 @@ class MacOSBackend(ScrollMixin, Backend):
         if self.is_desktop(window):
             roots = macos_shell.desktop_roots(window.pid)
             return bool(roots) and macos.element_frame(roots[0]) == window.frame
+        if self.is_mission_control(window):
+            current = self.mission_control_window()
+            return current is not None and current.frame == window.frame
         try:
-            # Vale também para o Mission Control: root() falha assim que ele fecha.
             return macos.element_frame(self.root(window)) == window.frame
         except ScreenError:
             return False
@@ -247,7 +249,10 @@ class MacOSBackend(ScrollMixin, Backend):
     def _walk_mission_control(self, window):
         """Janelas e mesas do Mission Control; o AXPress de cada uma leva até ela."""
         self.shell_elements = set()
-        for item in macos_shell.mission_control_items(self.root(window)):
+        opened = macos_shell.mission_control()
+        if opened is None:
+            raise ScreenError("O Mission Control foi fechado.")
+        for item in macos_shell.mission_control_items(opened[1]):
             self.shell_elements.add(item)
             yield 1, item, window.frame
 
@@ -359,15 +364,15 @@ class MacOSBackend(ScrollMixin, Backend):
     def mission_control(self, opened, cancelled=lambda: False):
         if cancelled():
             raise ScreenError("Ação cancelada antes da execução.")
-        dock_pid = macos.pid_for_bundle(macos_shell.DOCK)
-        if dock_pid is None:
+        if (macos.pid_for_bundle(macos_shell.DOCK) is None
+                and macos.pid_for_bundle(macos_shell.WINDOW_MANAGER) is None):
             raise ScreenError("O Dock não está em execução; o Mission Control depende dele.")
-        if not macos_shell.toggle_mission_control(opened, dock_pid):
+        if not macos_shell.toggle_mission_control(opened):
             raise ScreenError("O Mission Control não " + ("abriu." if opened else "fechou.") + " Tente de novo.")
         if not opened:
             return None
         # Devolve a "janela" do Mission Control: a sessão já numera as janelas sem outro comando.
-        macos_shell.wait_mission_control_settled(dock_pid)
+        macos_shell.wait_mission_control_settled()
         window = self.mission_control_window()
         if window is None:
             raise ScreenError("O Mission Control foi fechado.")

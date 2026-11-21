@@ -14,8 +14,10 @@ OPEN_ACCEPTED_ERRORS = frozenset({-25205})
 # Papéis cuja ação só se descobre perguntando ao próprio elemento.
 SHELL_ROLES = frozenset({DOCK_ITEM, "AXImage"})
 
-# O app "Mission Control" só alterna a visão; quem desenha as janelas e as mesas é o Dock.
+# O app "Mission Control" só alterna a visão. Quem desenha as janelas e as mesas mudou com o
+# macOS: nas versões antigas é o Dock; no Tahoe, o WindowManager. O código procura nos dois.
 MISSION_CONTROL_APP = "com.apple.exposelauncher"
+WINDOW_MANAGER = "com.apple.WindowManager"
 MISSION_CONTROL_ITEM = "AXButton"
 MISSION_CONTROL_WAIT = 2.0  # a animação de entrada e saída leva menos de meio segundo
 MISSION_CONTROL_SETTLE = 1.0  # limite para as miniaturas terminarem de chegar ao lugar
@@ -57,30 +59,55 @@ def _child(element, identifier):
                  if macos.read_attribute(child, "AXIdentifier") == identifier), None)
 
 
-def mission_control(dock_pid):
-    """O grupo do Mission Control ("mc"), que só existe enquanto ele está aberto."""
-    if dock_pid is None:
+def mission_control(dock_pid=None):
+    """O Mission Control aberto como (pid de quem o desenha, telas), ou None se estiver fechado.
+
+    Há uma "mc.display" por monitor. Nas versões antigas do macOS elas ficam no Dock, dentro de
+    um grupo "mc"; no Tahoe ficam direto no app WindowManager. Os identificadores não mudam com
+    o idioma. Medido nos dois sistemas.
+    """
+    dock = dock_pid if dock_pid is not None else macos.pid_for_bundle(DOCK)
+    if dock is not None:
+        root = _child(macos.application_element(dock), "mc")
+        if root is not None:
+            return dock, tuple(children(root))
+    manager = macos.pid_for_bundle(WINDOW_MANAGER)
+    if manager is not None:
+        displays = tuple(child for child in children(macos.application_element(manager))
+                         if macos.read_attribute(child, "AXIdentifier") == "mc.display")
+        if displays:
+            return manager, displays
+    return None
+
+
+def mission_control_frame(displays):
+    """O retângulo que cobre todas as telas do Mission Control (um ou mais monitores)."""
+    frames = [frame for frame in (macos.element_frame(display) for display in displays) if frame]
+    if not frames:
         return None
-    return _child(macos.application_element(dock_pid), "mc")
+    left, top = min(f[0] for f in frames), min(f[1] for f in frames)
+    right, bottom = max(f[0] + f[2] for f in frames), max(f[1] + f[3] for f in frames)
+    return (left, top, right - left, bottom - top)
 
 
-def mission_control_items(root):
+def mission_control_items(displays):
     """Miniaturas das janelas e, depois, as mesas da barra do Spaces, monitor por monitor.
 
-    Os identificadores ("mc.windows", "mc.spaces.list") não mudam com o idioma; os títulos, sim.
+    Nas versões antigas as janelas ficam num grupo "mc.windows"; no Tahoe, direto na tela.
     O botão de adicionar mesa fica de fora: não leva a nenhuma janela.
     """
-    for display in children(root):
+    for display in displays:
         windows = _child(display, "mc.windows")
-        if windows is not None:
-            yield from (item for item in children(windows) if macos.element_role(item) == MISSION_CONTROL_ITEM)
+        for item in children(windows if windows is not None else display):
+            if macos.element_role(item) == MISSION_CONTROL_ITEM:
+                yield item
         spaces = _child(display, "mc.spaces")
         listing = _child(spaces, "mc.spaces.list") if spaces is not None else None
         if listing is not None:
             yield from (item for item in children(listing) if macos.element_role(item) == MISSION_CONTROL_ITEM)
 
 
-def toggle_mission_control(opened, dock_pid, runner=None, clock=time.monotonic, sleep=time.sleep):
+def toggle_mission_control(opened, dock_pid=None, runner=None, clock=time.monotonic, sleep=time.sleep):
     """Abre (ou fecha) o Mission Control e espera a mudança aparecer. Devolve False se não apareceu."""
     if (mission_control(dock_pid) is not None) == opened:
         return True
@@ -94,7 +121,7 @@ def toggle_mission_control(opened, dock_pid, runner=None, clock=time.monotonic, 
     return True
 
 
-def wait_mission_control_settled(dock_pid, clock=time.monotonic, sleep=time.sleep):
+def wait_mission_control_settled(dock_pid=None, clock=time.monotonic, sleep=time.sleep):
     """Espera as miniaturas pararem de se mexer antes de numerar.
 
     Logo que o Mission Control aparece, elas ainda estão crescendo até o lugar; números lidos nessa
@@ -103,10 +130,10 @@ def wait_mission_control_settled(dock_pid, clock=time.monotonic, sleep=time.slee
     deadline = clock() + MISSION_CONTROL_SETTLE
     previous = None
     while True:
-        root = mission_control(dock_pid)
-        if root is None:
+        opened = mission_control(dock_pid)
+        if opened is None:
             return  # fechou no meio do caminho; quem chamou percebe
-        current = tuple(macos.element_frame(item) for item in mission_control_items(root))
+        current = tuple(macos.element_frame(item) for item in mission_control_items(opened[1]))
         if (current and current == previous) or clock() >= deadline:
             return
         previous = current
