@@ -582,6 +582,11 @@ python -m pip install -r requirements.txt
 Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Permita o acesso
 ao microfone para o terminal ou IDE nas configurações de privacidade do macOS.
 
+Com a pasta Documentos sincronizada no iCloud, o macOS marca como ocultos os arquivos de
+pastas como `.venv`, e o Qt ignora plugins ocultos (“Could not find the Qt platform plugin
+cocoa”). Por isso, na primeira abertura, a barra copia os plugins do Qt para
+`~/Library/Caches/Jarvis` e usa essa cópia; não é preciso definir `QT_PLUGIN_PATH`.
+
 ### O que recebe número em cada tipo de aplicativo (macOS)
 
 - **Finder**: arquivos e pastas da janela (abrem como no duplo clique), os atalhos da barra

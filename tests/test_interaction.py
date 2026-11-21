@@ -1,4 +1,7 @@
 """Regressões de diálogo e recuperação sem Whisper nem ações externas."""
+import os
+import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -378,6 +381,52 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         for bad in ({"continuous_seconds": 1}, {"continuous_seconds": 25}, {"continuous_mode": "sim"}):
             with self.assertRaises(ValueError):
                 validate_preferences(bad)
+
+
+class QtPluginsTest(unittest.TestCase):
+    """O Qt ignora plugins ocultos; o macOS chegou a marcar a .venv inteira como oculta."""
+
+    @unittest.skipUnless(hasattr(os, "chflags") and sys.platform == "darwin", "marca de oculto só existe no macOS")
+    def test_plugins_ocultos_sao_liberados(self):
+        from speakbar.__main__ import unhide_qt_plugins
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "platforms"
+            folder.mkdir()
+            plugin = folder / "libqcocoa.dylib"
+            plugin.write_bytes(b"")
+            for path in (folder, plugin):
+                os.chflags(path, os.lstat(path).st_flags | stat.UF_HIDDEN)
+            self.assertEqual(unhide_qt_plugins(root), 2)
+            self.assertFalse(os.lstat(plugin).st_flags & stat.UF_HIDDEN)
+            self.assertEqual(unhide_qt_plugins(root), 0)  # nada mais a fazer
+
+    def test_fora_do_macos_nao_faz_nada(self):
+        from speakbar.__main__ import unhide_qt_plugins
+        with patch.object(sys, "platform", "win32"):
+            self.assertEqual(unhide_qt_plugins("/qualquer"), 0)
+
+    @unittest.skipUnless(hasattr(os, "chflags") and sys.platform == "darwin", "marca de oculto só existe no macOS")
+    def test_copia_os_plugins_para_fora_da_venv(self):
+        from speakbar.__main__ import prepare_qt_plugins
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as cache:
+            (Path(source) / "platforms").mkdir()
+            plugin = Path(source) / "platforms" / "libqcocoa.dylib"
+            plugin.write_bytes(b"plugin")
+            os.chflags(plugin, os.lstat(plugin).st_flags | stat.UF_HIDDEN)  # como o iCloud deixa
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("QT_PLUGIN_PATH", None)
+                target = prepare_qt_plugins(source, cache)
+                self.assertEqual(os.environ["QT_PLUGIN_PATH"], target)
+            copied = Path(target) / "platforms" / "libqcocoa.dylib"
+            self.assertEqual(copied.read_bytes(), b"plugin")
+            self.assertFalse(os.lstat(copied).st_flags & stat.UF_HIDDEN)
+            self.assertTrue(target.startswith(cache))
+
+    def test_respeita_um_qt_plugin_path_ja_definido(self):
+        from speakbar.__main__ import prepare_qt_plugins
+        with patch.dict(os.environ, {"QT_PLUGIN_PATH": "/minha/pasta"}):
+            self.assertIsNone(prepare_qt_plugins("/origem", "/cache"))
+            self.assertEqual(os.environ["QT_PLUGIN_PATH"], "/minha/pasta")
 
 
 class SettingsVoiceTest(ControllerFixture, unittest.TestCase):
