@@ -53,7 +53,11 @@ docker compose up --build -d
 No macOS e no Linux, troque `.venv\Scripts\python.exe` por `.venv/bin/python`.
 
 O Docker Desktop precisa estar em execução antes de iniciar os containers.
-A transcrição em streaming exige a API e o novo serviço `realtime` disponíveis.
+A transcrição em streaming exige a API e o serviço `realtime`, os únicos que sobem por
+padrão (cerca de 1,5 GB de RAM, quase sem CPU parado). O redis, o worker e o beat do modo
+antigo só sobem com `docker compose --profile batch up -d`. Quem já tinha os cinco
+containers rodando pode desligar os três extras uma vez com
+`docker compose --profile batch down` e depois `docker compose up -d --build`.
 Na primeira inicialização, o `realtime` baixa o Whisper `small` para o volume de cache
 e aquece o modelo antes de aceitar conexões. Acompanhe com `docker compose logs -f realtime`;
 `Application startup complete` indica que está pronto. Os próximos inícios reutilizam o cache.
@@ -507,7 +511,9 @@ Remove-Item Env:TRANSCRIPTION_MODE
 
 No Linux/macOS: `TRANSCRIPTION_MODE=batch python main.py`.
 O modo batch mantém WAVs, `RECORD_SECONDS`, upload e consulta a cada 500 ms com limite
-de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
+de 120 segundos. Ele precisa de Redis e worker Celery, além da API, que não sobem por
+padrão: inicie com `docker compose --profile batch up -d`. O worker só carrega o Whisper na
+primeira transcrição, então o beat (que apenas agenda a limpeza dos uploads) fica leve.
 
 ### Organização da integração
 

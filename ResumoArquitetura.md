@@ -37,7 +37,7 @@ planejada aparece ao final.
 | `screen_access.matching` | Host | Normalização de texto comum a todo o projeto e escolha por semelhança sonora |
 | API FastAPI | Docker | Proxy WebSocket e endpoints legados de transcrição em lote |
 | `realtime` | Docker | Whisper small, aquecimento e uma conexão de reconhecimento por vez |
-| Worker, Beat e Redis | Docker | Processamento e limpeza dos uploads do modo em lote |
+| Worker, Beat e Redis | Docker | Modo em lote (opcional, perfil `batch`): processamento e limpeza dos uploads |
 
 As dependências do host ficam todas no `requirements.txt` da raiz, com marcadores por sistema.
 
