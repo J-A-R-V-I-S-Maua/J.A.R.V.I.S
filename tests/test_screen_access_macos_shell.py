@@ -608,6 +608,25 @@ class MissionControlTahoeTest(unittest.TestCase):
     def test_fechado_nao_e_a_janela_da_frente(self):
         self.assertFalse(self.env.backend.foreground().identity.startswith("missioncontrol:"))
 
+    def test_janela_de_outra_mesa_nao_ganha_numero(self):
+        # Medido no Tahoe: o Claude em tela cheia noutra mesa vinha como uma caixa enorme sobre as janelas.
+        env = self.env
+        env.roles["hidden"], env.names["hidden"], env.frames["hidden"] = "AXButton", "Claude", (287, 260, 895, 562)
+        env.actions["hidden"] = ("AXPress",)
+        env.children["disp1"] = ("appstore", "chrome1", "hidden", "spaces1")
+        for element, number in (("appstore", 11), ("chrome1", 12), ("hidden", 108)):
+            env.attrs[(element, "wid")] = number
+        env.macos.onscreen_window_numbers = Mock(return_value={11, 12})
+        self.opened(True)
+        snapshot = env.backend.scan(env.backend.foreground())
+        self.assertNotIn("Claude", [e.name for e in snapshot.elements])
+        self.assertIn("Mesa 1", [e.name for e in snapshot.elements])  # mesas não têm wid e continuam
+
+    def test_numeros_grandes_no_meio_das_miniaturas(self):
+        self.opened(True)
+        snapshot = self.env.backend.scan(self.env.backend.foreground())
+        self.assertEqual({e.badge for e in snapshot.elements}, {"center"})
+
     def test_mostrar_janelas_abre_e_espera_o_window_manager(self):
         shell = self.env.module.macos_shell
         with patch.object(shell.subprocess, "run", side_effect=lambda *a, **k: self.opened(True)) as run, \
@@ -697,9 +716,24 @@ class MissionControlToggleTest(unittest.TestCase):
         self.assertFalse(env.backend.foreground().identity.startswith("missioncontrol:"))
 
     def test_quando_nao_abre_explica(self):
-        env, _ = self.environment(appears=False)
+        env, calls = self.environment(appears=False)
         with self.assertRaisesRegex(env.module.ScreenError, "não abriu"):
             env.backend.mission_control(True)
+        self.assertEqual(len(calls), 2)  # pediu de novo antes de desistir
+
+    def test_pedido_ignorado_na_animacao_e_repetido(self):
+        env = Environment(self, mission_control=False)
+        shell = env.module.macos_shell
+        calls = []
+
+        def run(arguments, **kwargs):
+            calls.append(arguments)
+            if len(calls) == 2:  # o primeiro caiu na animação de fechar e foi ignorado
+                env.set_mission_control(True)
+
+        with patch.object(shell.subprocess, "run", side_effect=run), patch.object(shell, "MISSION_CONTROL_WAIT", 0.05):
+            self.assertTrue(env.backend.mission_control(True))
+        self.assertEqual(len(calls), 2)
 
     def test_sem_dock_nao_tenta(self):
         env = Environment(self, dock_running=False)

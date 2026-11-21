@@ -82,6 +82,12 @@ def frontmost_application():
     return pid, app.localizedName() if app is not None else ""
 
 
+def onscreen_window_numbers():
+    """Números das janelas que o macOS está mostrando agora (as de outras mesas ficam de fora)."""
+    return {info.get("kCGWindowNumber") for info in
+            CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) or ()}
+
+
 def bundle_id(pid):
     """Identificador do aplicativo de um processo (ex.: com.google.Chrome), ou None."""
     application = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)

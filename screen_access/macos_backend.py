@@ -1,4 +1,5 @@
 """Adaptação da AX API existente ao contrato compartilhado."""
+from dataclasses import replace
 import os
 import threading
 import time
@@ -245,6 +246,14 @@ class MacOSBackend(ScrollMixin, Backend):
             for item in macos_shell.dock_items(dock_pid):
                 self.shell_elements.add(item)
                 yield 1, item, None
+
+    def scan(self, window, *args, **kwargs):
+        snapshot = super().scan(window, *args, **kwargs)
+        if self.is_mission_control(window):
+            # Miniaturas grandes, vistas de longe: o número vai no meio, grande e sem contorno.
+            snapshot = replace(snapshot, elements=tuple(replace(e, badge="center") for e in snapshot.elements))
+            self.snapshot = snapshot
+        return snapshot
 
     def _walk_mission_control(self, window):
         """Janelas e mesas do Mission Control; o AXPress de cada uma leva até ela."""

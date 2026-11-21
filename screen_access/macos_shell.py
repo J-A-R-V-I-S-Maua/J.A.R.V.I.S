@@ -94,13 +94,23 @@ def mission_control_items(displays):
     """Miniaturas das janelas e, depois, as mesas da barra do Spaces, monitor por monitor.
 
     Nas versões antigas as janelas ficam num grupo "mc.windows"; no Tahoe, direto na tela.
-    O botão de adicionar mesa fica de fora: não leva a nenhuma janela.
+    O botão de adicionar mesa fica de fora: não leva a nenhuma janela. No Tahoe também vem uma
+    miniatura para a janela de um app em tela cheia noutra mesa, que não aparece (no Mac real: uma
+    caixa enorme por cima das outras janelas); ela tem o número da janela ("wid") e não está na tela.
     """
+    onscreen = None
     for display in displays:
         windows = _child(display, "mc.windows")
         for item in children(windows if windows is not None else display):
-            if macos.element_role(item) == MISSION_CONTROL_ITEM:
-                yield item
+            if macos.element_role(item) != MISSION_CONTROL_ITEM:
+                continue
+            number = macos.read_attribute(item, "wid")
+            if number is not None:
+                if onscreen is None:
+                    onscreen = macos.onscreen_window_numbers()
+                if number not in onscreen:
+                    continue
+            yield item
         spaces = _child(display, "mc.spaces")
         listing = _child(spaces, "mc.spaces.list") if spaces is not None else None
         if listing is not None:
@@ -111,14 +121,19 @@ def toggle_mission_control(opened, dock_pid=None, runner=None, clock=time.monoto
     """Abre (ou fecha) o Mission Control e espera a mudança aparecer. Devolve False se não apareceu."""
     if (mission_control(dock_pid) is not None) == opened:
         return True
-    (runner or subprocess.run)(["/usr/bin/open", "-b", MISSION_CONTROL_APP], capture_output=True,
-                               stdin=subprocess.DEVNULL, timeout=10, check=True)
-    deadline = clock() + MISSION_CONTROL_WAIT
-    while (mission_control(dock_pid) is not None) != opened:
-        if clock() >= deadline:
-            return False
-        sleep(0.05)
-    return True
+    # Um pedido feito durante a animação de abrir ou fechar é ignorado pelo macOS ("fechar janelas"
+    # e logo "mostrar janelas"); então, se nada mudou no prazo, pede mais uma vez.
+    for attempt in range(2):
+        (runner or subprocess.run)(["/usr/bin/open", "-b", MISSION_CONTROL_APP], capture_output=True,
+                                   stdin=subprocess.DEVNULL, timeout=10, check=True)
+        deadline = clock() + MISSION_CONTROL_WAIT
+        while (mission_control(dock_pid) is not None) != opened:
+            if clock() >= deadline:
+                break
+            sleep(0.05)
+        else:
+            return True
+    return False
 
 
 def wait_mission_control_settled(dock_pid=None, clock=time.monotonic, sleep=time.sleep):

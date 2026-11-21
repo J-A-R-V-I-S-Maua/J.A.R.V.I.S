@@ -108,6 +108,21 @@ class OverlayTest(unittest.TestCase):
         self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating))
         window.deleteLater()
 
+    def test_numero_no_meio_desenha_sem_erro(self):
+        from PySide6.QtGui import QPixmap, QPainter
+        from PySide6.QtCore import QPoint
+        window = MarkerWindow(APP.primaryScreen())
+        window.resize(400, 300)
+        window.markers = [(1, (10, 10, 120, 80)), (2, (150, 100, 200, 150), "center")]
+        pixmap = QPixmap(400, 300)
+        painter = QPainter(pixmap)
+        window.render(painter, QPoint(0, 0))
+        painter.end()
+        image = pixmap.toImage()
+        around_center = {image.pixelColor(x, 175).name().lower() for x in range(225, 276)}
+        self.assertIn("#006fcd", around_center)  # o número azul no meio da miniatura
+        window.deleteLater()
+
     def test_overlay_stays_visible_when_another_app_is_active_on_macos(self):
         window = MarkerWindow(APP.primaryScreen())
         self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))

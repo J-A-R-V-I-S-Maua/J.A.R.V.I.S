@@ -255,7 +255,10 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   confirmar, para ir até ela. **“Cancelar”** esconde os números; **“fechar janelas”** sai
   do Mission Control sem escolher.
   Também aceita “mostre as janelas”, “ver janelas” e “esconder janelas”. A speakbar e os
-  números continuam visíveis por cima do Mission Control, em todos os monitores. Funciona nas
+  números continuam visíveis por cima do Mission Control, em todos os monitores. Cada miniatura
+  ganha um número grande no meio, sem contorno, para ler de longe. Janelas de outras mesas
+  (como um app em tela cheia) não recebem número, porque o Mission Control não as mostra. Se o
+  pedido cair na animação de abrir ou fechar, o Jarvis pede de novo. Funciona nas
   versões antigas do macOS (Mission Control desenhado pelo Dock) e no Tahoe (desenhado pelo
   WindowManager).
 - **“Digitar olá, mundo”** (Windows, macOS e Linux): dê foco ao campo desejado e fale o comando.

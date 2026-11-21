@@ -25,6 +25,7 @@ class Element:
     role: str
     frame: tuple | None
     action: str
+    badge: str = "corner"  # "center": número grande no meio, sem contorno (miniaturas do Mission Control)
 
 
 @dataclass(frozen=True)

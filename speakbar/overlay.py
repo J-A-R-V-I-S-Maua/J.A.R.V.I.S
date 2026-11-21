@@ -134,7 +134,11 @@ class MarkerWindow(QWidget):
         painter.setFont(font)
         occupied = []
         accent = QColor("#000000" if self.high_contrast else "#006fcd")
-        for number, frame in self.markers:
+        for marker in self.markers:
+            number, frame = marker[:2]
+            if len(marker) > 2 and marker[2] == "center":
+                self._paint_center_badge(painter, number, frame, accent)
+                continue
             x, y, width, height = frame
             outline = QColor(accent)
             if not self.high_contrast:
@@ -160,6 +164,30 @@ class MarkerWindow(QWidget):
             painter.drawRoundedRect(badge, radius, radius)
             painter.setPen(QColor("white"))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(number))
+
+
+    def _paint_center_badge(self, painter, number, frame, accent):
+        """Número grande no meio da miniatura (Mission Control): legível de longe e nunca na borda."""
+        painter.save()
+        font = painter.font()
+        font.setPixelSize(max(26, round(self.number_size * 2.2)))
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        height = metrics.height() + 14
+        width = max(height, metrics.horizontalAdvance(str(number)) + 26)
+        x, y, w, h = frame
+        badge = QRectF(x + (w - width) / 2, y + (h - height) / 2, width, height)
+        radius = height / 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 90))
+        painter.drawRoundedRect(badge.translated(0, 2.5), radius, radius)
+        painter.setPen(QPen(QColor("white"), 2.5))
+        painter.setBrush(accent)
+        painter.drawRoundedRect(badge, radius, radius)
+        painter.setPen(QColor("white"))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(number))
+        painter.restore()
 
 
 class NumberOverlay:
@@ -191,7 +219,8 @@ class NumberOverlay:
                 clipped = intersection(element.frame, physical)
                 if clipped:
                     mapped = convert_frame(clipped, physical, logical)
-                    markers.append((element.number, (mapped[0]-logical[0], mapped[1]-logical[1], mapped[2], mapped[3])))
+                    markers.append((element.number, (mapped[0]-logical[0], mapped[1]-logical[1], mapped[2], mapped[3]),
+                                    getattr(element, "badge", "corner")))
             if markers:
                 window = MarkerWindow(screen, self.number_size, self.high_contrast)
                 window.markers = markers
