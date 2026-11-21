@@ -557,6 +557,17 @@ class BrowserSessionTest(unittest.TestCase):
         for phrase in ("aba nove", "aba", "voltar", "nova", "abrir Safari", "role para baixo"):
             self.assertIsNone(browser_command(phrase), phrase)
 
+    def test_trocas_reais_do_whisper_com_aba(self):
+        # Transcrições medidas com a voz Luciana do macOS e o vocabulário atual do Whisper.
+        from screen_access.commands import browser_command
+
+        for phrase, expected in (("Nova Ada.", ("new_tab", None)), ("Ado anterior.", ("previous_tab", None)),
+                                 ("Fechar ava.", ("close_tab", None)), ("Ir para a ada 2", ("tab", 2))):
+            self.assertEqual(browser_command(phrase), expected, phrase)
+        # A troca só vale quando a frase inteira vira um comando: "Ada" solta continua sendo nada.
+        for phrase in ("Ada", "a Ada chegou", "nova Ada Lovelace"):
+            self.assertIsNone(browser_command(phrase), phrase)
+
     def test_respostas_com_voltar_nao_cancelam(self):
         self.assertIsNone(classify_reply("voltar página"))
 

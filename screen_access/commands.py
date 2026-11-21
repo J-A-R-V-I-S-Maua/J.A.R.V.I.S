@@ -189,15 +189,22 @@ BROWSER_ACTIONS = frozenset(BROWSER_COMMANDS.values()) | {"tab"}
 SPOKEN_COMMANDS = {**FIELD_COMMANDS, **BROWSER_COMMANDS}
 
 
+# Como o Whisper escreve "aba" quando ela vem solta numa frase curta (medido com a voz Luciana
+# do macOS: "Nova Ada", "Ado anterior"). Pôr "aba" no vocabulário do Whisper resolvia, mas
+# apagava o ditado; aqui a troca só vale se a frase inteira virar um comando de navegador.
+TAB_SOUNDALIKES = frozenset({"ada", "ava", "ado", "alba"})
+
+
 def browser_command(text):
     """("new_tab"|…|"tab", número da aba ou None), ou None. "Ir para a aba 3" vira ("tab", 3)."""
     phrase = normalized(text)
-    if phrase in BROWSER_COMMANDS:
-        return BROWSER_COMMANDS[phrase], None
-    match = re.fullmatch(r"(?:(?:ir|va|vai) para (?:a )?)?aba (?:numero )?(.+)", phrase)
-    number = parse_number(match[1]) if match else None
-    if number is not None and 1 <= number <= 8:
-        return "tab", number
+    for candidate in (phrase, " ".join("aba" if word in TAB_SOUNDALIKES else word for word in phrase.split())):
+        if candidate in BROWSER_COMMANDS:
+            return BROWSER_COMMANDS[candidate], None
+        match = re.fullmatch(r"(?:(?:ir|va|vai) para (?:a )?)?aba (?:numero )?(.+)", candidate)
+        number = parse_number(match[1]) if match else None
+        if number is not None and 1 <= number <= 8:
+            return "tab", number
     return None
 
 
