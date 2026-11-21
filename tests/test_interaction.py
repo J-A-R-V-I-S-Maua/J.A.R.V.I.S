@@ -429,6 +429,26 @@ class QtPluginsTest(unittest.TestCase):
             self.assertEqual(os.environ["QT_PLUGIN_PATH"], "/minha/pasta")
 
 
+class WakeEchoTest(ControllerFixture, unittest.TestCase):
+    """Quem fala "Hey Jarvis, colar texto" de uma vez: o fim do chamado entra na transcrição."""
+
+    def test_tira_o_chamado_so_do_comeco(self):
+        from speakbar.commands import without_wake_word
+        for heard, expected in (("Reijarvis, selecionar a palavra Maria.", "selecionar a palavra Maria."),
+                                ("Rei Jarvis, colar texto.", "colar texto."), ("Hey Jarvis nova aba", "nova aba"),
+                                ("Ei, Jarvis. Deletar.", "Deletar.")):
+            self.assertEqual(without_wake_word(heard), expected)
+        for kept in ("Obrigado, Jarvis.", "digitar o Jarvis é legal", "Reijarvis.", "Jarvisson chegou"):
+            self.assertEqual(without_wake_word(kept), kept)
+
+    def test_comando_com_o_chamado_na_frente_funciona(self):
+        window = Window("chrome-1", 777, "Google Chrome", (0, 0, 1200, 800))
+        self.controller.screen.session.last_window = window
+        self.event(State.LISTENING)
+        self.event(State.RESULT, "Reijarvis, nova aba.")
+        self.assertEqual(self.controller.screen.executor.submit.call_args.args[1:], ("browser", window, "new_tab", None))
+
+
 class SettingsVoiceTest(ControllerFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()

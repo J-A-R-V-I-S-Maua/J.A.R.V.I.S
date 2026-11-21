@@ -239,6 +239,13 @@ class WhisperPromptTest(unittest.TestCase):
         for speech in ("Deletar.", "Ok.", "Digitar bom dia a todos."):
             self.assertEqual(realtime.without_prompt_echo(speech), speech)
 
+    def test_palavras_chave_incluem_as_abas_sem_mexer_no_vocabulario(self):
+        realtime = self.load({})
+        options = realtime.transcription_options()
+        for word in ("nova aba", "fechar aba", "próxima aba", "confirmar", "cancelar"):
+            self.assertIn(word, options["hotwords"])
+        self.assertNotIn("aba", realtime.DEFAULT_PROMPT)  # no vocabulário elas apagavam o ditado
+
     def test_variavel_vazia_mantem_o_padrao_e_preenchida_substitui(self):
         self.assertEqual(self.load({"WHISPER_INITIAL_PROMPT": "  "}).INITIAL_PROMPT,
                          self.load({}).DEFAULT_PROMPT)

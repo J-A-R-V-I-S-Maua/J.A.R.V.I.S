@@ -1,5 +1,6 @@
 """Adaptação dos eventos do serviço de voz para a thread gráfica."""
 import logging
+import os
 import sys
 import time
 from dataclasses import replace
@@ -7,7 +8,7 @@ from dataclasses import replace
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from wakeword.events import State, VoiceEvent, Reason
-from .commands import ends_conversation
+from .commands import ends_conversation, without_wake_word
 from .interaction import InteractionCoordinator, Presentation
 
 
@@ -404,6 +405,10 @@ class VoiceController(QObject):
                 return
             self._last_result_id = event.interaction_id
             follow_up, self._follow_up = self._follow_up, False
+            if os.getenv("JARVIS_LOG_TRANSCRIPTS") == "1":
+                # Só para diagnóstico, ligado de propósito: por padrão nada do que é dito vai ao log.
+                logging.info("transcrição: %r", event.text)
+            event = replace(event, text=without_wake_word(event.text))
             if self._ignore_result:
                 return
             if follow_up and not self.screen.session.active and not self.shortcuts.active and ends_conversation(event.text):

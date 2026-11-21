@@ -251,6 +251,8 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   diga “reabrir aba”. Com outro aplicativo na frente o Jarvis não aperta nada, porque o
   Cmd+W fecharia uma janela ou um documento. Voltar e avançar usam o menu do próprio
   navegador, então funcionam em qualquer idioma, no teclado ABNT2 e com um campo de texto em foco.
+- Pode falar o chamado e o comando de uma vez (“Hey Jarvis, colar texto”): o pedaço do chamado
+  que às vezes entra no começo da transcrição (“Rei Jarvis, colar texto”) é descartado.
 - **Modo contínuo**: depois de um comando que deu certo (uma aba aberta, um texto colado, um
   atalho, um aplicativo aberto…), o Jarvis já fica ouvindo o próximo por alguns segundos, sem
   precisar de “Hey Jarvis”: “abrir Chrome”, “nova aba”, “próxima aba”… Se ninguém falar, ele
@@ -464,6 +466,7 @@ lista numerada para escolher. Não precisa de cadastro; nos outros sistemas, use
 | `MICROPHONE_DEVICE_INDEX` | dispositivo padrão | Índice da entrada de áudio do host; consulte `--list-microphones`. |
 | `WHISPER_INITIAL_PROMPT` | vocabulário dos comandos | Contexto do Whisper no container `realtime`. O padrão lista os comandos (“deletar”, “limpar campo”, “copiar”…), que sem ele saem trocados; um valor próprio substitui o padrão. Exige recriar o serviço. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
+| `JARVIS_LOG_TRANSCRIPTS` | desligado | Com `1`, o log mostra o texto que o Whisper devolveu em cada fala. Só para diagnóstico: por padrão nada do que é dito vai para o log. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
 
 Os três tempos de streaming aceitam números positivos até 30 segundos. Para pausas

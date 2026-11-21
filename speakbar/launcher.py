@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 
-from screen_access.commands import CONFIRM, browser_command, parse_number
+from screen_access.commands import CONFIRM, parse_number, spoken_browser_command
 
 from .applications import find_application, is_open_request, open_application
 from .commands import normalize
@@ -50,7 +50,8 @@ class LauncherConversation(ShortcutConversation):
             return super().handle(text)
         if super().handle(text):
             return True
-        if is_open_request(text) and browser_command(text) is None:  # "abrir nova aba" é do navegador
+        # "Abrir nova aba" e até um "Abar anterior" mal transcrito são do navegador, não de um aplicativo.
+        if is_open_request(text) and spoken_browser_command(text) is None:
             self._open(text)
             return True
         return False

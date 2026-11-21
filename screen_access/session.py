@@ -1,16 +1,17 @@
 """Sessão de escolha e confirmação, independente de Qt e do sistema operacional."""
 from dataclasses import dataclass
 from enum import Enum
+import logging
 import re
 import time
 from .commands import (
-    BROWSER_ACTIONS,
     CANCEL,
     CONFIRM,
     FIELD_COMMANDS,
     SPOKEN_COMMANDS,
     action_command,
     browser_command,
+    spoken_browser_command,
     field_command,
     normalized,
     parse_number,
@@ -219,6 +220,8 @@ class ScreenSession:
                     # enquanto o Jarvis ouvia): o comando vale para a janela que está na frente.
                     self.target = data
                     return
+                logging.debug("janela mudou durante a interação: %s %s -> %s %s", self.target.identity,
+                             self.target.frame, data.identity, data.frame)
                 self.cancel("A janela mudou. Diga mostrar números para ler novamente.")
             return
         if kind == "unavailable":
@@ -476,14 +479,10 @@ class ScreenSession:
         dictation = re.match(r"^\s*digitar\b[\s,:;.!?]*(.*)$", text, re.IGNORECASE)
         show = phrase in {"mostrar numeros", "mostre numeros", "mostrar os numeros", "mostre os numeros"}
         undecided = not show and command is None and dictation is None and field_action is None
-        browser = browser_command(text) if undecided else None
+        browser = spoken_browser_command(text) if undecided else None
         if undecided and browser is None:
-            # Último recurso: uma frase que soa como um comando ("Polar texto" por "colar texto").
-            guess = field_command(text, SPOKEN_COMMANDS)
-            if guess in BROWSER_ACTIONS:
-                browser = guess, None
-            else:
-                field_action = guess
+            # Último recurso: uma frase que soa como um comando de campo ("Polar texto" por "colar texto").
+            field_action = field_command(text, SPOKEN_COMMANDS)
         if browser is not None:
             self._browser(*browser)
             return True

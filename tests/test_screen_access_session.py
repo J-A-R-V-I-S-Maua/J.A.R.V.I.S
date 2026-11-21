@@ -562,6 +562,7 @@ class BrowserSessionTest(unittest.TestCase):
         from screen_access.commands import browser_command
 
         for phrase, expected in (("Nova Ada.", ("new_tab", None)), ("Ado anterior.", ("previous_tab", None)),
+                                 ("Abar anterior.", ("previous_tab", None)), ("Próxima arba.", ("next_tab", None)),
                                  ("Fechar ava.", ("close_tab", None)), ("Ir para a ada 2", ("tab", 2))):
             self.assertEqual(browser_command(phrase), expected, phrase)
         # A troca só vale quando a frase inteira vira um comando: "Ada" solta continua sendo nada.
