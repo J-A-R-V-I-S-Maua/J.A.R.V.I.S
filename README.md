@@ -6,6 +6,51 @@ O fluxo implementado hoje usa comandos explícitos para controles acessíveis da
 digitação e atalhos de abertura. Movimento livre do mouse, envio guiado de e-mails,
 interpretação por LLM e interrupção independente por voz são objetivos futuros.
 
+## Docker: o que fazer depois de atualizar o projeto
+
+O reconhecimento de voz (Whisper) roda no Docker. Por padrão sobem só dois containers:
+`api` e `realtime`, cerca de 1,5 GB de RAM e quase nada de CPU parado. O Docker Desktop
+precisa estar aberto.
+
+**Uma vez só, se você tinha a versão antiga com cinco containers** (redis, worker e beat
+subiam sempre e ocupavam uns 2,3 GB sem uso). Os volumes ficam, então o Whisper não é
+baixado de novo:
+
+```bash
+docker compose --profile batch down
+docker compose up -d --build
+```
+
+**Sempre que fizer `git pull`** e vierem mudanças em `worker/` (o Whisper, o vocabulário e as
+palavras-chave dos comandos) ou em `api/`, reconstrua para o Docker usar o código novo:
+
+```bash
+docker compose up -d --build
+```
+
+Se só o `worker/realtime.py` mudou, basta `docker compose up -d --build realtime`. O
+reconhecimento fica fora do ar por uns 20 segundos enquanto o Whisper recarrega; o Jarvis
+aberto reconecta sozinho. Mudanças só na barra ou no acesso à tela (`speakbar/`,
+`screen_access/`, `wakeword/`) não precisam do Docker: basta fechar e abrir o Jarvis.
+
+**Para conferir se está tudo certo:**
+
+```bash
+docker compose ps
+docker compose logs -f realtime
+```
+
+O `ps` deve mostrar `api` e `realtime` rodando; no log, `Application startup complete` indica
+que o Whisper está pronto. Na primeira vez o `realtime` baixa o modelo, e isso demora mais.
+
+**Modo antigo (gravação e upload, `TRANSCRIPTION_MODE=batch`):** só ele usa redis, worker e
+beat. Suba com `docker compose --profile batch up -d` e volte ao normal com
+`docker compose --profile batch down` seguido de `docker compose up -d`.
+
+**Se ficar lento:** o Whisper usa até 4 núcleos durante cada transcrição. Outro processo
+pesado no computador (por exemplo uma segunda instância do Whisper) deixa a resposta bem mais
+lenta; confira com `docker stats --no-stream` se só aparecem `api` e `realtime`.
+
 ## Feedback, ajuda e recuperação por voz
 
 A resposta é exclusivamente textual. A barra separa o estado **Ouvindo…** ou
