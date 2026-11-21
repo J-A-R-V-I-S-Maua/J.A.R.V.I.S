@@ -1,4 +1,5 @@
 """Editor de preferências e atalhos; toda alteração é um rascunho até Salvar."""
+import sys
 import copy
 import os
 import uuid
@@ -11,6 +12,11 @@ from .preferences import defaults, validate_preferences
 from .shortcuts import WINDOWS_RESOURCES, validate_shortcut, validate_shortcuts
 from .settings_style import STYLE, HIGH_CONTRAST
 from .commands import settings_command, all_help
+
+
+# Exemplos prontos: no Windows, recursos dele; nos outros sistemas, pastas que existem em todos.
+TEMPLATES = {"win32": ("YouTube", "Explorador", "Configurações"), "other": ("YouTube", "Downloads", "Documentos")}
+FOLDER_TEMPLATES = {"Downloads": "Downloads", "Documentos": "Documents"}
 
 
 class SettingsWindow(QDialog):
@@ -204,7 +210,10 @@ class SettingsWindow(QDialog):
         self.phrase = QLineEdit()
         self.phrase.setPlaceholderText("Ex.: abrir YouTube")
         self.kind = QComboBox()
-        for label, value in (("Site", "site"), ("Aplicativo", "application"), ("Pasta", "folder"), ("Recurso do Windows", "windows")):
+        kinds = [("Site", "site"), ("Aplicativo", "application"), ("Pasta", "folder")]
+        if sys.platform == "win32":  # Explorador e Configurações do Windows só existem nele
+            kinds.append(("Recurso do Windows", "windows"))
+        for label, value in kinds:
             self.kind.addItem(label, value)
         self.destination = QLineEdit()
         self.destination.setPlaceholderText("Ex.: youtube.com")
@@ -232,7 +241,7 @@ class SettingsWindow(QDialog):
         layout.addWidget(editor)
         layout.addWidget(QLabel("Preencher exemplo:"))
         templates = QGridLayout()
-        for index, key in enumerate(("YouTube", "Explorador", "Configurações")):
+        for index, key in enumerate(TEMPLATES.get(sys.platform, TEMPLATES["other"])):
             button = QPushButton(key)
             button.setAutoDefault(False)
             button.clicked.connect(lambda checked=False, key=key: self._template(key))
@@ -485,6 +494,9 @@ class SettingsWindow(QDialog):
             self.phrase.setText("abrir configurações do Windows")
         if key == "YouTube":
             self.destination.setText("https://youtube.com")
+        elif key in FOLDER_TEMPLATES:
+            self.kind.setCurrentIndex(self.kind.findData("folder"))
+            self.destination.setText(os.path.join(os.path.expanduser("~"), FOLDER_TEMPLATES[key]))
         else:
             self.kind.setCurrentIndex(self.kind.findData("windows"))
             self.resources.setCurrentIndex(self.resources.findData("explorer" if key == "Explorador" else "settings"))
@@ -493,7 +505,9 @@ class SettingsWindow(QDialog):
         if self.kind.currentData() == "folder":
             path = QFileDialog.getExistingDirectory(self, "Selecionar pasta")
         else:
-            path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo ou atalho", "", "Aplicativos (*.exe *.lnk)")
+            from .shortcuts import APPLICATION_FILTERS
+            path, _ = QFileDialog.getOpenFileName(self, "Selecionar aplicativo ou atalho", "",
+                                                  APPLICATION_FILTERS.get(sys.platform, ""))
         if path:
             self.destination.setText(path)
 

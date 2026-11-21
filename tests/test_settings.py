@@ -87,14 +87,59 @@ class SettingsDomainTest(unittest.TestCase):
         items = [shortcut(), dict(shortcut("abrir app", str(app), "application"), id="two"),
                  dict(shortcut("abrir pasta", self.temp.name, "folder"), id="three"),
                  dict(shortcut("abrir Windows", "settings", "windows"), id="four")]
-        validated = validate_shortcuts(items)
-        with patch("speakbar.shortcuts.QDesktopServices.openUrl", return_value=True) as web, patch("speakbar.shortcuts.os.startfile", create=True) as local:
+        with patch("speakbar.shortcuts.QDesktopServices.openUrl", return_value=True) as web, \
+                patch("speakbar.shortcuts.os.startfile", create=True) as local, \
+                patch("speakbar.shortcuts.sys.platform", "win32"):
+            validated = validate_shortcuts(items)
             service = ShortcutService(validated)
             for item in validated:
                 service.execute(item)
             self.assertEqual(web.call_count, 1)
             self.assertEqual(local.call_count, 3)
             local.assert_called_with("ms-settings:")
+
+    def launched(self, platform, item):
+        with patch("speakbar.shortcuts.sys.platform", platform), \
+                patch("speakbar.shortcuts.subprocess.Popen") as popen:
+            ShortcutService(validate_shortcuts([item])).execute(item)
+        return popen.call_args.args[0]
+
+    def test_aplicativo_e_pasta_no_macos_abrem_com_open(self):
+        app = Path(self.temp.name) / "Notas.app"
+        app.mkdir()
+        self.assertEqual(self.launched("darwin", dict(shortcut("abrir notas", str(app), "application"), id="a")),
+                         ["/usr/bin/open", str(app)])
+        self.assertEqual(self.launched("darwin", dict(shortcut("abrir pasta", self.temp.name, "folder"), id="b")),
+                         ["/usr/bin/open", self.temp.name])
+
+    def test_no_linux_executavel_roda_direto_e_pasta_vai_pelo_xdg_open(self):
+        app = Path(self.temp.name) / "editor"
+        app.write_text("#!/bin/sh\n")
+        app.chmod(0o755)
+        self.assertEqual(self.launched("linux", dict(shortcut("abrir editor", str(app), "application"), id="a")),
+                         [str(app)])
+        self.assertEqual(self.launched("linux", dict(shortcut("abrir pasta", self.temp.name, "folder"), id="b")),
+                         ["xdg-open", self.temp.name])
+
+    def test_tipo_de_aplicativo_por_sistema(self):
+        app = Path(self.temp.name) / "Notas.app"
+        app.mkdir()
+        exe = Path(self.temp.name) / "programa.exe"
+        exe.touch()
+        with patch("speakbar.shortcuts.sys.platform", "darwin"):
+            validate_shortcuts([dict(shortcut("abrir notas", str(app), "application"), id="a")])
+            with self.assertRaisesRegex(ValueError, ".app"):
+                validate_shortcuts([dict(shortcut("abrir programa", str(exe), "application"), id="b")])
+        with patch("speakbar.shortcuts.sys.platform", "win32"):
+            validate_shortcuts([dict(shortcut("abrir programa", str(exe), "application"), id="b")])
+            with self.assertRaisesRegex(ValueError, ".exe"):
+                validate_shortcuts([dict(shortcut("abrir notas", str(app), "application"), id="a")])
+
+    def test_recurso_do_windows_fora_do_windows_avisa(self):
+        item = dict(shortcut("abrir Windows", "settings", "windows"), id="w")
+        with patch("speakbar.shortcuts.sys.platform", "darwin"):
+            with self.assertRaisesRegex(ValueError, "só abrem no Windows"):
+                ShortcutService(validate_shortcuts([item])).execute(item)
 
 
 class SettingsConversationTest(unittest.TestCase):
@@ -367,13 +412,27 @@ class AudioPreferencesTest(unittest.TestCase):
             bar.deleteLater()
             APP.processEvents()
 
+    def test_fora_do_windows_os_exemplos_sao_pastas_e_nao_ha_recurso_do_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = DemoController()
+            controller.preferences = PreferencesService(Path(directory) / "settings.json")
+            with patch("speakbar.settings_window.sys.platform", "darwin"):
+                dialog = SettingsWindow(controller, demo=True)
+            self.assertEqual(dialog.kind.findData("windows"), -1)
+            dialog._template("Downloads")
+            self.assertEqual(dialog.kind.currentData(), "folder")
+            self.assertTrue(dialog.destination.text().endswith("Downloads"))
+            dialog.deleteLater()
+
     def test_windows_settings_template_does_not_use_reserved_phrase(self):
         with tempfile.TemporaryDirectory() as directory:
             controller = DemoController()
             controller.preferences = PreferencesService(Path(directory) / "settings.json")
-            dialog = SettingsWindow(controller, demo=True)
-            dialog._template("Configurações")
-            dialog._save()
+            with patch("speakbar.settings_window.sys.platform", "win32"), \
+                    patch("speakbar.shortcuts.sys.platform", "win32"):
+                dialog = SettingsWindow(controller, demo=True)
+                dialog._template("Configurações")
+                dialog._save()
             self.assertEqual(controller.preferences.shortcuts[0]["phrase"], "abrir configurações do Windows")
             dialog.deleteLater()
 
