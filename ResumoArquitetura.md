@@ -114,9 +114,12 @@ O modo headless continua voltado à transcrição no terminal, usando o ambiente
 
 ## Limitações e evolução futura
 
-- O controle nativo usa UI Automation no Windows, a AX API no macOS (validada em um Mac real)
-  e AT-SPI no Linux. Mission Control, seleção de texto, copiar/recortar/colar e os comandos
-  de navegador existem só no macOS por enquanto.
+- O controle nativo usa UI Automation no Windows, a AX API no macOS e AT-SPI no Linux.
+  No macOS, validado num Mac real com o Tahoe; as versões anteriores são cobertas por testes
+  com a árvore medida nelas (o Mission Control era desenhado pelo Dock e no Tahoe passou ao
+  WindowManager, e o código procura nos dois). Mission Control, seleção de texto,
+  copiar/recortar/colar, comandos de navegador, menu de contexto com opções numeradas e
+  "abrir [aplicativo]" pelo nome existem só no macOS por enquanto.
 - Aplicativos sem controles acessíveis ou com privilégios diferentes podem recusar
   operações. Não há fallback por coordenadas ou visão computacional.
 - “Parar” por voz depende da captura e transcrição. O botão cancela a interação
@@ -128,7 +131,9 @@ O modo headless continua voltado à transcrição no terminal, usando o ambiente
 ## Validação
 
 A suíte `python -m unittest discover -s tests -v` cobre contratos de voz, sessão,
-roteamento, recuperação, apresentação e configurações. Os scripts explícitos
+roteamento, recuperação, apresentação e configurações, com dublês para Windows, macOS
+(versões antigas e Tahoe) e Linux. Ela passa inteira no macOS; no Windows e no Linux ainda
+precisa ser rodada nas máquinas desses sistemas. Os scripts explícitos
 `screen_native_check.py` e `settings_native_check.py` verificam integração nativa
 no Windows. `scroll_native_check.py` verifica rolagem em duas áreas Win32 isoladas.
 As prévias `interaction_visual_check.py` e `settings_visual_check.py`

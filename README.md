@@ -50,6 +50,8 @@ docker compose up --build -d
 .venv\Scripts\python.exe main.py
 ```
 
+No macOS e no Linux, troque `.venv\Scripts\python.exe` por `.venv/bin/python`.
+
 O Docker Desktop precisa estar em execução antes de iniciar os containers.
 A transcrição em streaming exige a API e o novo serviço `realtime` disponíveis.
 Na primeira inicialização, o `realtime` baixa o Whisper `small` para o volume de cache
@@ -70,7 +72,7 @@ A demonstração `--demo` continua funcionando sem Docker.
   Uma inferência já iniciada pode terminar no servidor, mas seu resultado será descartado.
 - X, Alt+F4 e “Sair” encerram a interface e a captura de áudio. Durante uma operação em
   andamento, a barra mostra “Encerrando…” até liberar os recursos; ela não fica minimizada.
-- Tab navega entre voz, fechar e texto; Enter/Espaço ativam os botões.
+- Tab navega entre voz, configurações, fechar e texto; Enter/Espaço ativam os botões.
   Com o texto focado, setas e PageUp/PageDown permitem navegar pela transcrição.
 - Falhas de áudio ou conexão têm recuperação automática e permitem nova tentativa pelo botão.
   Em caso de desconexão, a barra informa a falha sem apresentar uma transcrição incompleta.
@@ -79,8 +81,9 @@ A demonstração `--demo` continua funcionando sem Docker.
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
 ou uploads gravados no servidor. As gravações anteriores são preservadas.
 Controles da janela atual podem ser acionados após confirmação por voz, usando as APIs
-de acessibilidade do Windows/macOS. A interpretação por LLM continua fora desta etapa.
-A aparência preserva transparência e gradiente, sem desfoque nativo.
+de acessibilidade do Windows, do macOS e do Linux. A interpretação por LLM continua fora desta etapa.
+A barra segue o tema claro ou escuro do sistema (ou o alto contraste das configurações) e
+mostra o estado no botão de voz: ouvindo, transcrevendo, erro e a espera do modo contínuo.
 
 ### Modos de execução
 
@@ -167,6 +170,8 @@ não é necessário reconstruir os containers para esta integração. No PowerSh
 .venv\Scripts\python.exe main.py
 ```
 
+No macOS e no Linux: `.venv/bin/python -m pip install -r requirements.txt` e `.venv/bin/python main.py`.
+
 Feche a instância antiga da barra antes de iniciar a atualizada. Mantenha o aplicativo
 que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da barra):
 
@@ -174,10 +179,11 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   automaticamente. Responda **“sete”**, **“número sete”** ou **“clique no número sete”**.
 - **“Clique em pesquisar”**: compara o nome com os controles da janela. Se houver
   vários candidatos, mostra seus números e pede uma escolha.
-- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows):
-  solicita a abertura padrão de um item ou atalho pela ação nativa `Invoke`.
+- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows, macOS e Linux):
+  solicita a abertura padrão de um item ou atalho pela ação nativa (`Invoke` no Windows,
+  `AXOpen` no macOS).
   A abertura é solicitada uma única vez. Itens sem essa ação informam indisponibilidade.
-- **“Abrir menu de contexto da Lixeira”** (Windows): equivalente ao botão direito.
+- **“Abrir menu de contexto da Lixeira”** (Windows e Linux): equivalente ao botão direito.
   Também aceita **“clique com o botão direito no número sete”**. A barra identifica
   o controle e pede confirmação; então devolve o foco e envia **Shift+F10**, o
   [atalho do Windows para o menu de contexto](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu).
@@ -200,16 +206,18 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   confirmar, para ir até ela. **“Cancelar”** esconde os números; **“fechar janelas”** sai
   do Mission Control sem escolher.
   Também aceita “mostre as janelas”, “ver janelas” e “esconder janelas”. A speakbar e os
-  números continuam visíveis por cima do Mission Control.
-- **“Digitar olá, mundo”** (Windows): dê foco ao campo desejado e fale o comando.
+  números continuam visíveis por cima do Mission Control, em todos os monitores. Funciona nas
+  versões antigas do macOS (Mission Control desenhado pelo Dock) e no Tahoe (desenhado pelo
+  WindowManager).
+- **“Digitar olá, mundo”** (Windows, macOS e Linux): dê foco ao campo desejado e fale o comando.
   A barra mostra o texto reconhecido e pede **“confirmar”** antes de inseri-lo.
-- **“Digitar”** (Windows): a barra abre uma captura para o texto e, em seguida,
+- **“Digitar”** (Windows, macOS e Linux): a barra abre uma captura para o texto e, em seguida,
   outra para confirmação. Não é necessário repetir a wake word nessas respostas.
   O campo pode ter sido selecionado diretamente ou com **“clique em pesquisar”**.
-- **“Enter”** (Windows): pede confirmação e envia Enter ao campo de texto ativo.
+- **“Enter”** (Windows, macOS e Linux): pede confirmação e envia Enter ao campo de texto ativo.
   Em campos de pesquisa, executa o comportamento de pesquisa do aplicativo; em
   editores de várias linhas, pode inserir uma nova linha. Também aceita **“pressionar enter”**.
-- **“Deletar”** (Windows e macOS): pede confirmação e apaga **todo o conteúdo do campo ativo**,
+- **“Deletar”** (Windows, macOS e Linux): pede confirmação e apaga **todo o conteúdo do campo ativo**,
   incluindo texto que já existia antes da última ditagem. Também aceita **“apagar tudo”**,
   **“limpar campo”**, “apaga tudo”, “limpa o campo” e “deleta”. Sem campo editável ativo,
   solicita que você selecione um. “Apagar tudo” é a forma que o reconhecimento erra menos.
@@ -382,6 +390,8 @@ Use **Hey Jarvis** antes de cada comando de menu:
 - **Tamanho do texto 22**, **tamanho dos números 18**.
 - **Tempo de silêncio 3 segundos**, **tempo para começar a falar 15 segundos**,
   **duração máxima 30 segundos**, **limiar de ativação 0,3**.
+- **Ativar/desativar modo contínuo**, **tempo do modo contínuo 10 segundos** e
+  **ativar/desativar som do modo contínuo**.
 
 Números também podem ser ditos por extenso, como “vinte e dois” e “zero vírgula três”.
 Valores fora dos limites são recusados. Ajustes ficam no rascunho até salvar; seleção
@@ -389,9 +399,12 @@ de microfone e cadastro de atalhos continuam no formulário. Diga **ajuda** para
 os comandos. Durante um teste de transcrição, até “salvar configurações” é apenas
 texto de diagnóstico e não executa nenhuma ação.
 
-Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site,
-aplicativo `.exe` ou atalho `.lnk`, pasta ou recurso do Windows (Explorador,
-Configurações, Rede ou Som). Os exemplos apenas preenchem o formulário; clique em
+Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site, uma pasta
+ou um aplicativo: `.exe` ou atalho `.lnk` no Windows, `.app` no macOS e qualquer executável
+no Linux. No Windows há também os recursos do sistema (Explorador, Configurações, Rede ou
+Som); nos outros sistemas essa opção não aparece. Os exemplos (YouTube, Explorador e
+Configurações no Windows; YouTube, Downloads e Documentos nos demais) apenas preenchem o
+formulário; clique em
 **Salvar** para cadastrar. **Adicionar / atualizar** permite organizar vários
 cadastros antes de salvar. **Cancelar** descarta o rascunho. **Testar abertura** abre
 explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocorre.
@@ -417,7 +430,7 @@ mas pode aumentar chamadas acidentais. Microfones ausentes ou ambíguos exigem n
 
 Preferências e atalhos são gravados em `settings.json`, no diretório de configurações
 do usuário indicado pelo Qt (no Windows, normalmente
-`%LOCALAPPDATA%\J.A.R.V.I.S. Speakbar`). Campos personalizados prevalecem sobre o
+`%LOCALAPPDATA%\J.A.R.V.I.S. Speakbar`; no macOS, `~/Library/Preferences/J.A.R.V.I.S. Speakbar`). Campos personalizados prevalecem sobre o
 ambiente; os demais continuam usando seus valores atuais. A gravação é atômica.
 Arquivos inválidos são informados e preservados; ao salvar uma substituição, uma
 cópia `settings.invalid-*.json` é mantida. **Restaurar preferências** remove as
@@ -428,7 +441,12 @@ Salvar aplica a aparência e os limites de tela. Mudanças de áudio reiniciam a
 serviço de voz, após liberar o dispositivo. Ao sair, a posição da barra é salva quando
 a opção está ativada, e ajustada para um monitor disponível na próxima abertura.
 O modo headless continua usando o ambiente. Containers e configuração do Whisper
-não são alterados. Os destinos locais e o catálogo do sistema são priorizados para Windows.
+não são alterados.
+
+**Abrir aplicativos pelo nome** (macOS): “Hey Jarvis, abrir Spotify”, “abrir a calculadora”,
+“abrir ajustes do sistema”. O Jarvis procura entre os aplicativos instalados, inclusive pelos
+nomes em português, e pede **“confirmar”** antes de abrir. Se vários combinarem, mostra a
+lista numerada para escolher. Não precisa de cadastro; nos outros sistemas, use os atalhos.
 
 ### Configuração e modo anterior
 
@@ -505,14 +523,15 @@ de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
 - Uploads manuais e GET `/transcribe/{task_id}/status` permanecem disponíveis. O worker
   Celery também usa `small`, temperatura zero e beam 5; a retenção e o formato das respostas continuam iguais.
 
-Protocolo de streaming: [docs/streaming.md](docs/streaming.md).
+O protocolo de streaming está em `worker/streaming_engine.py` (servidor) e `api/streaming.py` (proxy).
+
 ## Reconhecimento de voz e modelos
 
 O serviço de voz escuta o wake word **"hey jarvis"** no microfone.
 
 O detector usa **ONNX Runtime em CPU** em Windows, Linux e macOS. TFLite não é usado
-na inferência e a supressão Speex fica desativada, pois sua integração no openWakeWord
-não é portátil entre esses sistemas. Referências: [openWakeWord](https://github.com/dscripka/openWakeWord)
+na inferência. A supressão de ruído Speex liga sozinha quando o pacote `speexdsp-ns` está
+instalado (ele só existe no Linux); nos outros sistemas fica desligada. Referências: [openWakeWord](https://github.com/dscripka/openWakeWord)
 e [ONNX Runtime](https://onnxruntime.ai/docs/get-started/with-python.html).
 
 Use Python **3.11 de 64 bits** como base comum aos três sistemas. No Windows, esta
@@ -579,8 +598,11 @@ export LDFLAGS="-L$(brew --prefix portaudio)/lib"
 python -m pip install -r requirements.txt
 ```
 
-Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Permita o acesso
-ao microfone para o terminal ou IDE nas configurações de privacidade do macOS.
+Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Também funciona com
+Python mais novo (testado com 3.14). Em Ajustes do Sistema → Privacidade e Segurança, permita
+**Microfone** e **Acessibilidade** para o terminal ou IDE de onde o Jarvis roda; sem
+Acessibilidade, os comandos de tela não funcionam. Testado no macOS Tahoe e nas versões
+anteriores (o Mission Control mudou de lugar no Tahoe, e o Jarvis procura nos dois).
 
 Com a pasta Documentos sincronizada no iCloud, o macOS marca como ocultos os arquivos de
 pastas como `.venv`, e o Qt ignora plugins ocultos (“Could not find the Qt platform plugin
@@ -598,8 +620,8 @@ cocoa”). Por isso, na primeira abertura, a barra copia os plugins do Qt para
   da página, incluindo as linhas clicáveis das listas, como as playlists e as músicas do Spotify.
   Uma linha sem título ganha o nome dos textos dela (“Ela Partiu – Tim Maia”). Esses apps só
   montam a árvore de acessibilidade depois que alguém pede e a desmontam quando ninguém a lê
-  por um tempo; por isso a leitura espera a página aparecer (cerca de 1 a 1,5 s, no máximo 3 s)
-  em vez de numerar uma janela quase vazia.
+  por um tempo; por isso a leitura espera a página parar de crescer (cerca de 1 a 1,5 s, no
+  máximo 3 s) em vez de numerar uma janela quase vazia.
 - **Outros apps nativos**: botões, links, caixas de seleção, menus, campos de texto e itens
   que se abrem com AXOpen.
 
@@ -618,4 +640,16 @@ python main.py
 Em distribuições com outro Python padrão, instale Python 3.11 e seus headers pelo
 gerenciador da distribuição ou por um gerenciador de versões antes de criar a venv.
 No Fedora, PortAudio usa `portaudio-devel`; no Arch, `portaudio`.
-Use uma sessão desktop com dispositivo de entrada disponível..
+Use uma sessão desktop com dispositivo de entrada disponível.
+
+O acesso à tela no Linux usa o AT-SPI pelo PyGObject (`gi`), envia teclas com `xdotool` (X11)
+ou `ydotool` (Wayland) e desenha os números no Wayland com gtk-layer-shell. Pelo que o código
+usa, no Debian/Ubuntu isso corresponde a:
+
+```bash
+sudo apt install gir1.2-atspi-2.0 libgirepository-2.0-dev libcairo2-dev pkg-config xdotool
+sudo apt install libgtk-layer-shell0 gir1.2-gtklayershell-0.1 gir1.2-gtk-3.0   # números no Wayland
+python -m pip install PyGObject
+```
+
+Esses passos vêm do código e ainda não foram conferidos numa instalação limpa de Linux.

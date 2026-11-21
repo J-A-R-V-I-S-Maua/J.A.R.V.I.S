@@ -175,10 +175,10 @@ class Backend:
         raise ScreenError("Comandos de aba e página estão disponíveis somente no macOS nesta versão.")
 
     def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
-        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+        raise ScreenError("Rolagem por voz disponível somente no Windows e no macOS nesta versão.")
 
     def scroll(self, snapshot, number, request, cancelled=lambda: False):
-        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+        raise ScreenError("Rolagem por voz disponível somente no Windows e no macOS nesta versão.")
 
 
 def get_backend():
@@ -191,4 +191,4 @@ def get_backend():
     if sys.platform == "linux":
         from .linux import LinuxBackend
         return LinuxBackend()
-    raise ScreenError("Acesso à tela disponível somente no Windows e macOS.")
+    raise ScreenError("Acesso à tela disponível somente no Windows, no macOS e no Linux.")
