@@ -15,6 +15,34 @@ SETTINGS_COMMANDS = {normalize(text) for text in (
     "abra as configurações do Jarvis", "abrir configurações do Jarvis", "abrir as configurações do Jarvis",
 )}
 HELP_COMMANDS = {"ajuda", "o que posso dizer", "quais comandos"}
+# O fim do "Hey Jarvis" entra no começo do comando quando a pessoa fala tudo de uma vez: o áudio
+# guarda um trecho antes da fala para não cortar a primeira sílaba. Transcrições reais com a voz
+# Luciana do macOS: "Reijarvis, colar texto.", "Rei Jarvis, selecionar a palavra Maria."
+WAKE_ECHO = re.compile(r"^\s*(?:(?:hey|hei|ei|ey|rei|re|hi|oi)[\s,]*)?j[aá]rv[ie]s\b[\s,.:;!?-]*", re.IGNORECASE)
+WAKE_ECHO_GLUED = re.compile(r"^\s*(?:hey|hei|ei|rei|re)j[aá]rv[ie]s\b[\s,.:;!?-]*", re.IGNORECASE)
+
+
+def without_wake_word(text):
+    """Tira o chamado do começo da transcrição ("Reijarvis, colar texto." vira "colar texto.").
+
+    Só no começo, e nunca deixa a frase vazia: "obrigado, Jarvis" e um ditado com "Jarvis" no
+    meio continuam iguais.
+    """
+    for pattern in (WAKE_ECHO_GLUED, WAKE_ECHO):
+        rest = pattern.sub("", text, count=1)
+        if rest != text and rest.strip(" .,!?"):
+            return rest
+    return text
+
+
+# A frase que encerra o modo contínuo em silêncio. Só ela: "pronto" ou "parar" soltos podem
+# aparecer numa conversa por perto.
+END_PHRASES = {"obrigado jarvis", "obrigada jarvis"}
+
+
+def ends_conversation(text):
+    return normalize(text) in END_PHRASES
+
 HELP = {
     "general": "Diga mostrar números, mostrar janelas, clique em [nome], digitar [texto], selecionar a palavra [texto], copiar texto, colar texto, role para baixo, role para cima, Enter, limpar campo, nova aba, fechar aba, próxima aba, voltar página, executar atalho ou abrir configurações.",
     "choosing": "Diga um dos números exibidos, confirmar após escolher, ou cancelar.",
@@ -82,7 +110,7 @@ def settings_command(text):
         return "close", None
     for prefix, enabled in (("ativar ", True), ("desativar ", False)):
         for label, key in (("alto contraste", "high_contrast"), ("lembrar posicao", "remember_position"),
-                           ("modo continuo", "continuous_mode")):
+                           ("modo continuo", "continuous_mode"), ("som do modo continuo", "continuous_sound")):
             if phrase == prefix + label:
                 return key, enabled
     prefixes = {"tamanho do texto": "text_size", "tamanho dos numeros": "number_size",

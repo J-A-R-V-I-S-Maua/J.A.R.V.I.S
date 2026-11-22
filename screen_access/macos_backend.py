@@ -1,5 +1,7 @@
 """Adaptação da AX API existente ao contrato compartilhado."""
+from dataclasses import replace
 import os
+import threading
 import time
 import uuid
 
@@ -27,9 +29,15 @@ BROWSER_UNAVAILABLE = {
     "reopen_tab": "Não há aba fechada para reabrir.", "next_tab": "Só há uma aba aberta.",
     "previous_tab": "Só há uma aba aberta.",
 }
+# Papéis que abrem um item com AXOpen numa janela comum (o nome de um arquivo no Finder, a barra
+# lateral, o caminho). Imagens só contam no Finder (visualização por ícones): numa página, uma foto
+# com AXOpen não é um item para abrir.
+OPEN_ROLES = frozenset({"AXTextField", "AXCell", "AXStaticText", "AXRow"})
 DESKTOP_PREFIX = "desktop:"
 MISSION_CONTROL_PREFIX = "missioncontrol:"
+MENU_PREFIX = "menu:"  # um menu de contexto aberto, tratado como a janela da frente enquanto existir
 FIELD_NAME_LIMIT = 60
+MENU_WAIT = 2.5  # o menu aparece em menos de 1 s
 MAX_ANCESTORS = 64  # nenhuma árvore real é tão funda; o limite só impede um laço sem fim
 
 
@@ -91,6 +99,8 @@ class MacOSBackend(ScrollMixin, Backend):
         super().__init__()
         # Controles da mesa e do Dock lidos na última varredura; só eles usam a classificação de shell.
         self.shell_elements = set()
+        self.finder_walk = False  # a última leitura foi de uma janela do Finder?
+        self.open_menu = None  # (pid, AXMenu) do menu de contexto que o Jarvis abriu
         # (identidade da janela, elemento): o campo de texto onde o cursor estava da última vez.
         self.last_field = None
         # (identidade da janela, elemento): o foco já analisado, para não refazer a conta a cada 0,2 s.
@@ -121,13 +131,33 @@ class MacOSBackend(ScrollMixin, Backend):
     def is_mission_control(window):
         return window.identity.startswith(MISSION_CONTROL_PREFIX)
 
+    @staticmethod
+    def is_menu(window):
+        return window.identity.startswith(MENU_PREFIX)
+
+    def is_shell(self, window):
+        """Mesa, Mission Control ou um menu aberto: não é uma janela com campos de texto."""
+        return self.is_desktop(window) or self.is_mission_control(window) or self.is_menu(window)
+
+    def menu_window(self):
+        """O menu de contexto aberto pelo Jarvis, enquanto ainda estiver na tela."""
+        if self.open_menu is None:
+            return None
+        pid, menu = self.open_menu
+        frame = macos.element_frame(menu)
+        # Fechado, o menu continua respondendo, mas com tamanho zero (medido no Finder).
+        if frame is None or not frame[2] or not frame[3] or macos.element_role(menu) != "AXMenu":
+            self.open_menu = None  # fechou: escolheram uma opção, apertaram Esc ou clicaram fora
+            return None
+        return Window(f"{MENU_PREFIX}{pid}", pid, "Menu de contexto", frame)
+
     def mission_control_window(self):
-        dock_pid = macos.pid_for_bundle(macos_shell.DOCK)
-        root = macos_shell.mission_control(dock_pid)
-        frame = macos.element_frame(root) if root is not None else None
+        """O Mission Control aberto como uma "janela" que cobre todos os monitores, ou None."""
+        opened = macos_shell.mission_control()
+        frame = macos_shell.mission_control_frame(opened[1]) if opened is not None else None
         if frame is None:
             return None
-        return Window(f"{MISSION_CONTROL_PREFIX}{dock_pid}", dock_pid, "Mission Control", frame)
+        return Window(f"{MISSION_CONTROL_PREFIX}{opened[0]}", opened[0], "Mission Control", frame)
 
     def desktop_window(self, pid):
         roots = macos_shell.desktop_roots(pid)
@@ -141,6 +171,9 @@ class MacOSBackend(ScrollMixin, Backend):
         mission_control = self.mission_control_window()
         if mission_control is not None:
             return mission_control
+        menu = self.menu_window()
+        if menu is not None:
+            return menu
         pid, name = macos.frontmost_application()
         native = macos.front_window(pid)
         # Clicar na mesa deixa o Finder ativo, e ele entrega a própria mesa (uma rolagem, não uma
@@ -154,11 +187,15 @@ class MacOSBackend(ScrollMixin, Backend):
         return Window(self.identity(pid, native), pid, macos.window_title(native) or name, macos.element_frame(native))
 
     def root(self, window):
+        if self.is_menu(window):
+            if self.open_menu is None or self.menu_window() is None:
+                raise ScreenError("O menu foi fechado.")
+            return self.open_menu[1]
         if self.is_mission_control(window):
-            native = macos_shell.mission_control(window.pid)
-            if native is None:
+            opened = macos_shell.mission_control()
+            if opened is None or not opened[1]:
                 raise ScreenError("O Mission Control foi fechado.")
-            return native
+            return opened[1][0]
         native = macos.front_window(window.pid)
         if native is None or self.identity(window.pid, native) != window.identity:
             raise ScreenError("A janela mudou.")
@@ -168,8 +205,10 @@ class MacOSBackend(ScrollMixin, Backend):
         if self.is_desktop(window):
             roots = macos_shell.desktop_roots(window.pid)
             return bool(roots) and macos.element_frame(roots[0]) == window.frame
+        if self.is_mission_control(window):
+            current = self.mission_control_window()
+            return current is not None and current.frame == window.frame
         try:
-            # Vale também para o Mission Control: root() falha assim que ele fecha.
             return macos.element_frame(self.root(window)) == window.frame
         except ScreenError:
             return False
@@ -181,7 +220,12 @@ class MacOSBackend(ScrollMixin, Backend):
         if self.is_mission_control(window):
             yield from self._walk_mission_control(window)
             return
+        if self.is_menu(window):
+            yield from ((1, item, window.frame) for item in macos_shell.menu_options(self.root(window)))
+            return
+        self.finder_walk = macos_shell.is_finder(window.pid)
         macos.enable_web_accessibility(window.pid)
+        macos.wait_for_web_content(self.root(window))
         if window.frame is None:
             for depth, element in macos.walk(self.root(window), max_depth):
                 yield depth, element, None
@@ -203,10 +247,21 @@ class MacOSBackend(ScrollMixin, Backend):
                 self.shell_elements.add(item)
                 yield 1, item, None
 
+    def scan(self, window, *args, **kwargs):
+        snapshot = super().scan(window, *args, **kwargs)
+        if self.is_mission_control(window):
+            # Miniaturas grandes, vistas de longe: o número vai no meio, grande e sem contorno.
+            snapshot = replace(snapshot, elements=tuple(replace(e, badge="center") for e in snapshot.elements))
+            self.snapshot = snapshot
+        return snapshot
+
     def _walk_mission_control(self, window):
         """Janelas e mesas do Mission Control; o AXPress de cada uma leva até ela."""
         self.shell_elements = set()
-        for item in macos_shell.mission_control_items(self.root(window)):
+        opened = macos_shell.mission_control()
+        if opened is None:
+            raise ScreenError("O Mission Control foi fechado.")
+        for item in macos_shell.mission_control_items(opened[1]):
             self.shell_elements.add(item)
             yield 1, item, window.frame
 
@@ -229,14 +284,37 @@ class MacOSBackend(ScrollMixin, Backend):
         if element in self.shell_elements:
             # Itens da mesa e do Dock não declaram AXEnabled; os separadores do Dock não têm nome.
             action = self.shell_action(element, role) if name else ""
-        elif enabled and role in macos.TEXT_INPUT_ROLES:
-            error, settable = AXUIElementIsAttributeSettable(element, "AXFocused", None)
-            if error == 0 and settable:
+        else:
+            actions = macos.action_names(element)
+            if enabled and role in macos.TEXT_INPUT_ROLES and self.focusable(element):
                 action = "focus"
-        elif enabled and role in macos.ACTION_ROLES and macos.can_press(element):
-            action = "press"
+            elif enabled and role in macos.ACTION_ROLES and "AXPress" in actions:
+                action = "press"
+            elif macos_shell.OPEN_ACTION in actions and (role in OPEN_ROLES or (role == "AXImage" and self.finder_walk)):
+                # Arquivos e pastas numa janela do Finder (o campo do nome), a barra lateral e o
+                # caminho: não são botões, mas declaram AXOpen, que abre o item como o duplo clique.
+                action = "open"
+            if action and not name:
+                name = self.derived_name(element, role)
+            if action == "open" and not name:
+                action = ""  # sem nome não dá para pedir nem conferir o que vai abrir
         visible = clip is None or macos.is_visible(element, clip)
         return (name, role, macos.element_frame(element), action, visible, element)
+
+    @staticmethod
+    def focusable(element):
+        error, settable = AXUIElementIsAttributeSettable(element, "AXFocused", None)
+        return error == 0 and bool(settable)
+
+    @staticmethod
+    def derived_name(element, role):
+        """Nome para um controle sem título, tirado do texto que está em volta dele."""
+        if role == "AXDisclosureTriangle":
+            # Na lista do Finder o triângulo fica na mesma célula que o nome do arquivo.
+            label = macos.text_inside(macos.parent(element), skip=element, limit=1)
+            verb = "Recolher" if macos.read_attribute(element, "AXValue") else "Expandir"
+            return f"{verb} {label}" if label else verb
+        return short_name(macos.text_inside(element))
 
     def perform(self, element, action):
         if action == "focus":
@@ -256,18 +334,54 @@ class MacOSBackend(ScrollMixin, Backend):
             raise ScreenError("Ação cancelada antes da execução.")
         self.perform(native, action)
 
+    def context_menu(self, snapshot, number, cancelled=lambda: False):
+        """Abre o menu de contexto do item (como o clique direito) e devolve o menu como janela.
+
+        O AXShowMenu fica preso enquanto o menu está aberto e volta com "não pôde completar"
+        depois de 1,5 s, com o menu ainda na tela. Por isso ele roda numa thread à parte, e aqui
+        só se procura o menu: o macOS o pendura num ancestral do item (no Finder, na lista).
+        """
+        native, action = self.validate(snapshot, number)
+        if cancelled():
+            raise ScreenError("Ação cancelada antes da execução.")
+        target = native
+        for _ in range(4):  # no Finder o menu é do campo do nome; em outros apps, de um ancestral
+            if target is None or "AXShowMenu" in macos.action_names(target):
+                break
+            target = macos.parent(target)
+        if target is None:
+            raise ScreenError("Este item não oferece menu de contexto.")
+        threading.Thread(target=macos.perform_action, args=(target, "AXShowMenu"),
+                         name="abrir-menu", daemon=True).start()
+        deadline = time.monotonic() + MENU_WAIT
+        while time.monotonic() < deadline and not cancelled():
+            menu = macos_shell.menu_near(target)
+            if menu is not None:
+                self.open_menu = (snapshot.window.pid, menu)
+                window = self.menu_window()
+                if window is not None:
+                    return window
+            time.sleep(0.05)
+        raise ScreenError("O menu de contexto não abriu. Tente de novo.")
+
+    def close_menu(self, cancelled=lambda: False):
+        """Fecha o menu que o Jarvis abriu, se ele ainda estiver na tela (como apertar Esc)."""
+        if self.menu_window() is not None:
+            macos.press_key(macos.KEY_ESCAPE)
+        self.open_menu = None
+
     def mission_control(self, opened, cancelled=lambda: False):
         if cancelled():
             raise ScreenError("Ação cancelada antes da execução.")
-        dock_pid = macos.pid_for_bundle(macos_shell.DOCK)
-        if dock_pid is None:
+        if (macos.pid_for_bundle(macos_shell.DOCK) is None
+                and macos.pid_for_bundle(macos_shell.WINDOW_MANAGER) is None):
             raise ScreenError("O Dock não está em execução; o Mission Control depende dele.")
-        if not macos_shell.toggle_mission_control(opened, dock_pid):
+        if not macos_shell.toggle_mission_control(opened):
             raise ScreenError("O Mission Control não " + ("abriu." if opened else "fechou.") + " Tente de novo.")
         if not opened:
             return None
         # Devolve a "janela" do Mission Control: a sessão já numera as janelas sem outro comando.
-        macos_shell.wait_mission_control_settled(dock_pid)
+        macos_shell.wait_mission_control_settled()
         window = self.mission_control_window()
         if window is None:
             raise ScreenError("O Mission Control foi fechado.")
@@ -279,7 +393,7 @@ class MacOSBackend(ScrollMixin, Backend):
         """Abas e páginas do navegador da frente, pelos atalhos que todos os navegadores do Mac têm."""
         if cancelled():
             raise ScreenError("Ação cancelada antes da execução.")
-        if (window is None or self.is_desktop(window) or self.is_mission_control(window)
+        if (window is None or self.is_shell(window)
                 or macos.bundle_id(window.pid) not in BROWSERS):
             raise ScreenError("Comandos de aba e página só funcionam com o navegador na frente.")
         current = self.foreground()
@@ -325,7 +439,7 @@ class MacOSBackend(ScrollMixin, Backend):
 
     def belongs_to(self, element, window):
         """O elemento está dentro desta janela?"""
-        if self.is_desktop(window) or self.is_mission_control(window):
+        if self.is_shell(window):
             return False
         try:
             root = self.root(window)
@@ -343,7 +457,7 @@ class MacOSBackend(ScrollMixin, Backend):
 
     def remember_focus(self, window):
         """Guarda o campo de texto que está com o cursor. O executor chama isto a cada 0,2 s."""
-        if window is None or window.pid == os.getpid() or self.is_desktop(window) or self.is_mission_control(window):
+        if window is None or window.pid == os.getpid() or self.is_shell(window):
             return  # a barra do Jarvis, a mesa ou o Mission Control na frente não apagam o último campo
         element = macos.focused_element(window.pid)
         if element is None:
@@ -549,7 +663,7 @@ class MacOSBackend(ScrollMixin, Backend):
             except Exception:
                 truncated = True
         areas, mode = (bars, "bar") if bars else (wheels, "wheel")
-        shell = self.is_desktop(window) or self.is_mission_control(window)
+        shell = self.is_shell(window)
         if not areas and not truncated and not shell and window.frame is not None:
             areas = [(self.root(window), window.frame, None)]  # Electron: nenhuma área exposta
         elements = []

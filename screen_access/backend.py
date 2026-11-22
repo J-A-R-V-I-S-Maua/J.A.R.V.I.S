@@ -25,6 +25,7 @@ class Element:
     role: str
     frame: tuple | None
     action: str
+    badge: str = "corner"  # "center": número grande no meio, sem contorno (miniaturas do Mission Control)
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,9 @@ class Backend:
     def context_menu(self, snapshot, number, cancelled=lambda: False):
         raise ScreenError("Menu de contexto indisponível neste sistema.")
 
+    def close_menu(self, cancelled=lambda: False):
+        """Fecha um menu de contexto aberto pelo Jarvis; sem nada aberto, não faz nada."""
+
     def dictate(self, snapshot, text, cancelled=lambda: False):
         raise ScreenError("Digitação no campo ativo indisponível neste sistema.")
 
@@ -172,10 +176,10 @@ class Backend:
         raise ScreenError("Comandos de aba e página estão disponíveis somente no macOS nesta versão.")
 
     def prepare_scroll(self, window, max_depth=32, max_elements=3000, cancelled=lambda: False):
-        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+        raise ScreenError("Rolagem por voz disponível somente no Windows e no macOS nesta versão.")
 
     def scroll(self, snapshot, number, request, cancelled=lambda: False):
-        raise ScreenError("Rolagem por voz disponível somente no Windows nesta versão.")
+        raise ScreenError("Rolagem por voz disponível somente no Windows e no macOS nesta versão.")
 
 
 def get_backend():
@@ -188,4 +192,4 @@ def get_backend():
     if sys.platform == "linux":
         from .linux import LinuxBackend
         return LinuxBackend()
-    raise ScreenError("Acesso à tela disponível somente no Windows e macOS.")
+    raise ScreenError("Acesso à tela disponível somente no Windows, no macOS e no Linux.")

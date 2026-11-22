@@ -1,6 +1,10 @@
+# Por padrão sobem só a API e o realtime, que é o que o Jarvis usa (modo stream).
+# O modo antigo de gravação e upload (TRANSCRIPTION_MODE=batch) precisa do redis, do worker e
+# do beat: suba com `docker compose --profile batch up -d`.
 services:
   redis:
     image: redis:7-alpine
+    profiles: ["batch"]
     ports:
       - "6379:6379"
     volumes:
@@ -13,6 +17,7 @@ services:
 
   worker:
     build: ./worker
+    profiles: ["batch"]
     depends_on:
       redis:
         condition: service_healthy
@@ -29,6 +34,7 @@ services:
 
   beat:
     build: ./worker
+    profiles: ["batch"]
     depends_on:
       redis:
         condition: service_healthy
@@ -51,9 +57,8 @@ services:
 
   api:
     build: ./api
-    depends_on:
-      redis:
-        condition: service_healthy
+    # Sem depender do redis: o streaming não usa a fila, e as rotas do modo batch só o procuram
+    # quando são chamadas (com o perfil batch ligado ele está lá).
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_BACKEND_URL=redis://redis:6379/0

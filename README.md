@@ -6,6 +6,51 @@ O fluxo implementado hoje usa comandos explícitos para controles acessíveis da
 digitação e atalhos de abertura. Movimento livre do mouse, envio guiado de e-mails,
 interpretação por LLM e interrupção independente por voz são objetivos futuros.
 
+## Docker: o que fazer depois de atualizar o projeto
+
+O reconhecimento de voz (Whisper) roda no Docker. Por padrão sobem só dois containers:
+`api` e `realtime`, cerca de 1,5 GB de RAM e quase nada de CPU parado. O Docker Desktop
+precisa estar aberto.
+
+**Uma vez só, se você tinha a versão antiga com cinco containers** (redis, worker e beat
+subiam sempre e ocupavam uns 2,3 GB sem uso). Os volumes ficam, então o Whisper não é
+baixado de novo:
+
+```bash
+docker compose --profile batch down
+docker compose up -d --build
+```
+
+**Sempre que fizer `git pull`** e vierem mudanças em `worker/` (o Whisper, o vocabulário e as
+palavras-chave dos comandos) ou em `api/`, reconstrua para o Docker usar o código novo:
+
+```bash
+docker compose up -d --build
+```
+
+Se só o `worker/realtime.py` mudou, basta `docker compose up -d --build realtime`. O
+reconhecimento fica fora do ar por uns 20 segundos enquanto o Whisper recarrega; o Jarvis
+aberto reconecta sozinho. Mudanças só na barra ou no acesso à tela (`speakbar/`,
+`screen_access/`, `wakeword/`) não precisam do Docker: basta fechar e abrir o Jarvis.
+
+**Para conferir se está tudo certo:**
+
+```bash
+docker compose ps
+docker compose logs -f realtime
+```
+
+O `ps` deve mostrar `api` e `realtime` rodando; no log, `Application startup complete` indica
+que o Whisper está pronto. Na primeira vez o `realtime` baixa o modelo, e isso demora mais.
+
+**Modo antigo (gravação e upload, `TRANSCRIPTION_MODE=batch`):** só ele usa redis, worker e
+beat. Suba com `docker compose --profile batch up -d` e volte ao normal com
+`docker compose --profile batch down` seguido de `docker compose up -d`.
+
+**Se ficar lento:** o Whisper usa até 4 núcleos durante cada transcrição. Outro processo
+pesado no computador (por exemplo uma segunda instância do Whisper) deixa a resposta bem mais
+lenta; confira com `docker stats --no-stream` se só aparecem `api` e `realtime`.
+
 ## Feedback, ajuda e recuperação por voz
 
 A resposta é exclusivamente textual. A barra separa o estado **Ouvindo…** ou
@@ -50,8 +95,14 @@ docker compose up --build -d
 .venv\Scripts\python.exe main.py
 ```
 
+No macOS e no Linux, troque `.venv\Scripts\python.exe` por `.venv/bin/python`.
+
 O Docker Desktop precisa estar em execução antes de iniciar os containers.
-A transcrição em streaming exige a API e o novo serviço `realtime` disponíveis.
+A transcrição em streaming exige a API e o serviço `realtime`, os únicos que sobem por
+padrão (cerca de 1,5 GB de RAM, quase sem CPU parado). O redis, o worker e o beat do modo
+antigo só sobem com `docker compose --profile batch up -d`. Quem já tinha os cinco
+containers rodando pode desligar os três extras uma vez com
+`docker compose --profile batch down` e depois `docker compose up -d --build`.
 Na primeira inicialização, o `realtime` baixa o Whisper `small` para o volume de cache
 e aquece o modelo antes de aceitar conexões. Acompanhe com `docker compose logs -f realtime`;
 `Application startup complete` indica que está pronto. Os próximos inícios reutilizam o cache.
@@ -70,7 +121,7 @@ A demonstração `--demo` continua funcionando sem Docker.
   Uma inferência já iniciada pode terminar no servidor, mas seu resultado será descartado.
 - X, Alt+F4 e “Sair” encerram a interface e a captura de áudio. Durante uma operação em
   andamento, a barra mostra “Encerrando…” até liberar os recursos; ela não fica minimizada.
-- Tab navega entre voz, fechar e texto; Enter/Espaço ativam os botões.
+- Tab navega entre voz, configurações, fechar e texto; Enter/Espaço ativam os botões.
   Com o texto focado, setas e PageUp/PageDown permitem navegar pela transcrição.
 - Falhas de áudio ou conexão têm recuperação automática e permitem nova tentativa pelo botão.
   Em caso de desconexão, a barra informa a falha sem apresentar uma transcrição incompleta.
@@ -79,8 +130,9 @@ A demonstração `--demo` continua funcionando sem Docker.
 No modo padrão, o áudio fica **somente em memória**, sem novos WAVs em `recordings/`
 ou uploads gravados no servidor. As gravações anteriores são preservadas.
 Controles da janela atual podem ser acionados após confirmação por voz, usando as APIs
-de acessibilidade do Windows/macOS. A interpretação por LLM continua fora desta etapa.
-A aparência preserva transparência e gradiente, sem desfoque nativo.
+de acessibilidade do Windows, do macOS e do Linux. A interpretação por LLM continua fora desta etapa.
+A barra segue o tema claro ou escuro do sistema (ou o alto contraste das configurações) e
+mostra o estado no botão de voz: ouvindo, transcrevendo, erro e a espera do modo contínuo.
 
 ### Modos de execução
 
@@ -167,6 +219,8 @@ não é necessário reconstruir os containers para esta integração. No PowerSh
 .venv\Scripts\python.exe main.py
 ```
 
+No macOS e no Linux: `.venv/bin/python -m pip install -r requirements.txt` e `.venv/bin/python main.py`.
+
 Feche a instância antiga da barra antes de iniciar a atualizada. Mantenha o aplicativo
 que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da barra):
 
@@ -174,15 +228,22 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   automaticamente. Responda **“sete”**, **“número sete”** ou **“clique no número sete”**.
 - **“Clique em pesquisar”**: compara o nome com os controles da janela. Se houver
   vários candidatos, mostra seus números e pede uma escolha.
-- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows):
-  solicita a abertura padrão de um item ou atalho pela ação nativa `Invoke`.
+- **“Clique duas vezes na Lixeira”** ou **“duplo clique no número sete”** (Windows, macOS e Linux):
+  solicita a abertura padrão de um item ou atalho pela ação nativa (`Invoke` no Windows,
+  `AXOpen` no macOS).
   A abertura é solicitada uma única vez. Itens sem essa ação informam indisponibilidade.
-- **“Abrir menu de contexto da Lixeira”** (Windows): equivalente ao botão direito.
+- **“Abrir menu de contexto da Lixeira”** (Windows e Linux): equivalente ao botão direito.
   Também aceita **“clique com o botão direito no número sete”**. A barra identifica
   o controle e pede confirmação; então devolve o foco e envia **Shift+F10**, o
   [atalho do Windows para o menu de contexto](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu).
   O aplicativo precisa oferecer o menu para esse controle. A ação não escolhe
   automaticamente nenhuma opção do menu.
+- **“Abrir menu de contexto de Downloads”** (macOS): abre o menu do clique direito pela
+  acessibilidade, sem mexer no mouse, e as opções já aparecem numeradas (“Obter Informações”,
+  “Comprimir”, “Copiar”…). Diga o número e **“confirmar”**; a confirmação continua porque há
+  opções como “Mover para o Lixo”. **“Cancelar”** fecha o menu. As alternativas que só surgem
+  segurando Option e as opções desativadas ficam de fora. Funciona no Finder e nos apps que
+  oferecem o menu de contexto pela acessibilidade.
 - Depois da escolha, a barra mostra **“Acionar [nome]? Diga confirmar ou cancelar”**
   e abre outra captura. Diga **“confirmar”** ou **“sim”** para acionar; **“cancelar”**,
   **“não”** ou **“parar”** para abandonar a proposta. Não é necessário repetir a wake word.
@@ -194,16 +255,21 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   confirmar, para ir até ela. **“Cancelar”** esconde os números; **“fechar janelas”** sai
   do Mission Control sem escolher.
   Também aceita “mostre as janelas”, “ver janelas” e “esconder janelas”. A speakbar e os
-  números continuam visíveis por cima do Mission Control.
-- **“Digitar olá, mundo”** (Windows): dê foco ao campo desejado e fale o comando.
+  números continuam visíveis por cima do Mission Control, em todos os monitores. Cada miniatura
+  ganha um número grande no meio, sem contorno, para ler de longe. Janelas de outras mesas
+  (como um app em tela cheia) não recebem número, porque o Mission Control não as mostra. Se o
+  pedido cair na animação de abrir ou fechar, o Jarvis pede de novo. Funciona nas
+  versões antigas do macOS (Mission Control desenhado pelo Dock) e no Tahoe (desenhado pelo
+  WindowManager).
+- **“Digitar olá, mundo”** (Windows, macOS e Linux): dê foco ao campo desejado e fale o comando.
   A barra mostra o texto reconhecido e pede **“confirmar”** antes de inseri-lo.
-- **“Digitar”** (Windows): a barra abre uma captura para o texto e, em seguida,
+- **“Digitar”** (Windows, macOS e Linux): a barra abre uma captura para o texto e, em seguida,
   outra para confirmação. Não é necessário repetir a wake word nessas respostas.
   O campo pode ter sido selecionado diretamente ou com **“clique em pesquisar”**.
-- **“Enter”** (Windows): pede confirmação e envia Enter ao campo de texto ativo.
+- **“Enter”** (Windows, macOS e Linux): pede confirmação e envia Enter ao campo de texto ativo.
   Em campos de pesquisa, executa o comportamento de pesquisa do aplicativo; em
   editores de várias linhas, pode inserir uma nova linha. Também aceita **“pressionar enter”**.
-- **“Deletar”** (Windows e macOS): pede confirmação e apaga **todo o conteúdo do campo ativo**,
+- **“Deletar”** (Windows, macOS e Linux): pede confirmação e apaga **todo o conteúdo do campo ativo**,
   incluindo texto que já existia antes da última ditagem. Também aceita **“apagar tudo”**,
   **“limpar campo”**, “apaga tudo”, “limpa o campo” e “deleta”. Sem campo editável ativo,
   solicita que você selecione um. “Apagar tudo” é a forma que o reconhecimento erra menos.
@@ -233,12 +299,18 @@ que deseja controlar em primeiro plano e diga **hey jarvis** (ou use o botão da
   diga “reabrir aba”. Com outro aplicativo na frente o Jarvis não aperta nada, porque o
   Cmd+W fecharia uma janela ou um documento. Voltar e avançar usam o menu do próprio
   navegador, então funcionam em qualquer idioma, no teclado ABNT2 e com um campo de texto em foco.
+- Pode falar o chamado e o comando de uma vez (“Hey Jarvis, colar texto”): o pedaço do chamado
+  que às vezes entra no começo da transcrição (“Rei Jarvis, colar texto”) é descartado.
 - **Modo contínuo**: depois de um comando que deu certo (uma aba aberta, um texto colado, um
   atalho, um aplicativo aberto…), o Jarvis já fica ouvindo o próximo por alguns segundos, sem
   precisar de “Hey Jarvis”: “abrir Chrome”, “nova aba”, “próxima aba”… Se ninguém falar, ele
   volta em silêncio a esperar o “Hey Jarvis”; uma frase que não é comando também não gera
-  insistência. Liga e desliga em Configurações → Voz e microfone (padrão: ligado, 6 segundos),
-  ou por voz com as configurações abertas: “desativar modo contínuo”, “tempo do modo contínuo 8 segundos”.
+  insistência. Para encerrar antes, diga **“obrigado, Jarvis”**. Enquanto espera, um contorno em volta do botão de voz vai se esvaziando e,
+  quando o tempo acaba, não sobra nada dele; o contorno some assim que você começa a falar, porque a frase pode durar mais que a
+  espera. Um som curto avisa quando a escuta abre e outro quando ela acaba. Liga e desliga
+  em Configurações → Voz e microfone (padrão: ligado, 6 segundos, com som), ou por voz com as
+  configurações abertas: “desativar modo contínuo”, “tempo do modo contínuo 10 segundos”,
+  “desativar som do modo contínuo”.
 
 As perguntas aparecem como texto; não há voz sintetizada nesta etapa. Campos editáveis
 recebem foco. A digitação exige um comando explícito e confirmação. Botões, links, caixas de seleção e itens
@@ -372,6 +444,8 @@ Use **Hey Jarvis** antes de cada comando de menu:
 - **Tamanho do texto 22**, **tamanho dos números 18**.
 - **Tempo de silêncio 3 segundos**, **tempo para começar a falar 15 segundos**,
   **duração máxima 30 segundos**, **limiar de ativação 0,3**.
+- **Ativar/desativar modo contínuo**, **tempo do modo contínuo 10 segundos** e
+  **ativar/desativar som do modo contínuo**.
 
 Números também podem ser ditos por extenso, como “vinte e dois” e “zero vírgula três”.
 Valores fora dos limites são recusados. Ajustes ficam no rascunho até salvar; seleção
@@ -379,9 +453,12 @@ de microfone e cadastro de atalhos continuam no formulário. Diga **ajuda** para
 os comandos. Durante um teste de transcrição, até “salvar configurações” é apenas
 texto de diagnóstico e não executa nenhuma ação.
 
-Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site,
-aplicativo `.exe` ou atalho `.lnk`, pasta ou recurso do Windows (Explorador,
-Configurações, Rede ou Som). Os exemplos apenas preenchem o formulário; clique em
+Em **Atalhos**, preencha nome, frase de voz, ação e destino. Pode abrir um site, uma pasta
+ou um aplicativo: `.exe` ou atalho `.lnk` no Windows, `.app` no macOS e qualquer executável
+no Linux. No Windows há também os recursos do sistema (Explorador, Configurações, Rede ou
+Som); nos outros sistemas essa opção não aparece. Os exemplos (YouTube, Explorador e
+Configurações no Windows; YouTube, Downloads e Documentos nos demais) apenas preenchem o
+formulário; clique em
 **Salvar** para cadastrar. **Adicionar / atualizar** permite organizar vários
 cadastros antes de salvar. **Cancelar** descarta o rascunho. **Testar abertura** abre
 explicitamente o destino do formulário; no modo `--demo`, nenhuma abertura ocorre.
@@ -407,7 +484,7 @@ mas pode aumentar chamadas acidentais. Microfones ausentes ou ambíguos exigem n
 
 Preferências e atalhos são gravados em `settings.json`, no diretório de configurações
 do usuário indicado pelo Qt (no Windows, normalmente
-`%LOCALAPPDATA%\J.A.R.V.I.S. Speakbar`). Campos personalizados prevalecem sobre o
+`%LOCALAPPDATA%\J.A.R.V.I.S. Speakbar`; no macOS, `~/Library/Preferences/J.A.R.V.I.S. Speakbar`). Campos personalizados prevalecem sobre o
 ambiente; os demais continuam usando seus valores atuais. A gravação é atômica.
 Arquivos inválidos são informados e preservados; ao salvar uma substituição, uma
 cópia `settings.invalid-*.json` é mantida. **Restaurar preferências** remove as
@@ -418,7 +495,12 @@ Salvar aplica a aparência e os limites de tela. Mudanças de áudio reiniciam a
 serviço de voz, após liberar o dispositivo. Ao sair, a posição da barra é salva quando
 a opção está ativada, e ajustada para um monitor disponível na próxima abertura.
 O modo headless continua usando o ambiente. Containers e configuração do Whisper
-não são alterados. Os destinos locais e o catálogo do sistema são priorizados para Windows.
+não são alterados.
+
+**Abrir aplicativos pelo nome** (macOS): “Hey Jarvis, abrir Spotify”, “abrir a calculadora”,
+“abrir ajustes do sistema”. O Jarvis procura entre os aplicativos instalados, inclusive pelos
+nomes em português, e pede **“confirmar”** antes de abrir. Se vários combinarem, mostra a
+lista numerada para escolher. Não precisa de cadastro; nos outros sistemas, use os atalhos.
 
 ### Configuração e modo anterior
 
@@ -432,6 +514,7 @@ não são alterados. Os destinos locais e o catálogo do sistema são priorizado
 | `MICROPHONE_DEVICE_INDEX` | dispositivo padrão | Índice da entrada de áudio do host; consulte `--list-microphones`. |
 | `WHISPER_INITIAL_PROMPT` | vocabulário dos comandos | Contexto do Whisper no container `realtime`. O padrão lista os comandos (“deletar”, “limpar campo”, “copiar”…), que sem ele saem trocados; um valor próprio substitui o padrão. Exige recriar o serviço. |
 | `API_URL` | `http://localhost:8000` | Endereço público da API; o cliente deriva a URL WebSocket. |
+| `JARVIS_LOG_TRANSCRIPTS` | desligado | Com `1`, o log mostra o texto que o Whisper devolveu em cada fala. Só para diagnóstico: por padrão nada do que é dito vai para o log. |
 | `RECORD_SECONDS` | `5` | Duração da gravação, **somente no modo batch**. |
 
 Os três tempos de streaming aceitam números positivos até 30 segundos. Para pausas
@@ -479,7 +562,9 @@ Remove-Item Env:TRANSCRIPTION_MODE
 
 No Linux/macOS: `TRANSCRIPTION_MODE=batch python main.py`.
 O modo batch mantém WAVs, `RECORD_SECONDS`, upload e consulta a cada 500 ms com limite
-de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
+de 120 segundos. Ele precisa de Redis e worker Celery, além da API, que não sobem por
+padrão: inicie com `docker compose --profile batch up -d`. O worker só carrega o Whisper na
+primeira transcrição, então o beat (que apenas agenda a limpeza dos uploads) fica leve.
 
 ### Organização da integração
 
@@ -495,14 +580,15 @@ de 120 segundos. Ele precisa de Redis e worker Celery, além da API.
 - Uploads manuais e GET `/transcribe/{task_id}/status` permanecem disponíveis. O worker
   Celery também usa `small`, temperatura zero e beam 5; a retenção e o formato das respostas continuam iguais.
 
-Protocolo de streaming: [docs/streaming.md](docs/streaming.md).
+O protocolo de streaming está em `worker/streaming_engine.py` (servidor) e `api/streaming.py` (proxy).
+
 ## Reconhecimento de voz e modelos
 
 O serviço de voz escuta o wake word **"hey jarvis"** no microfone.
 
 O detector usa **ONNX Runtime em CPU** em Windows, Linux e macOS. TFLite não é usado
-na inferência e a supressão Speex fica desativada, pois sua integração no openWakeWord
-não é portátil entre esses sistemas. Referências: [openWakeWord](https://github.com/dscripka/openWakeWord)
+na inferência. A supressão de ruído Speex liga sozinha quando o pacote `speexdsp-ns` está
+instalado (ele só existe no Linux); nos outros sistemas fica desligada. Referências: [openWakeWord](https://github.com/dscripka/openWakeWord)
 e [ONNX Runtime](https://onnxruntime.ai/docs/get-started/with-python.html).
 
 Use Python **3.11 de 64 bits** como base comum aos três sistemas. No Windows, esta
@@ -569,8 +655,32 @@ export LDFLAGS="-L$(brew --prefix portaudio)/lib"
 python -m pip install -r requirements.txt
 ```
 
-Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Permita o acesso
-ao microfone para o terminal ou IDE nas configurações de privacidade do macOS.
+Use Python e Homebrew da mesma arquitetura (Intel ou Apple Silicon). Também funciona com
+Python mais novo (testado com 3.14). Em Ajustes do Sistema → Privacidade e Segurança, permita
+**Microfone** e **Acessibilidade** para o terminal ou IDE de onde o Jarvis roda; sem
+Acessibilidade, os comandos de tela não funcionam. Testado no macOS Tahoe e nas versões
+anteriores (o Mission Control mudou de lugar no Tahoe, e o Jarvis procura nos dois).
+
+Com a pasta Documentos sincronizada no iCloud, o macOS marca como ocultos os arquivos de
+pastas como `.venv`, e o Qt ignora plugins ocultos (“Could not find the Qt platform plugin
+cocoa”). Por isso, na primeira abertura, a barra copia os plugins do Qt para
+`~/Library/Caches/Jarvis` e usa essa cópia; não é preciso definir `QT_PLUGIN_PATH`.
+
+### O que recebe número em cada tipo de aplicativo (macOS)
+
+- **Finder**: arquivos e pastas da janela (abrem como no duplo clique), os atalhos da barra
+  lateral (Recentes, Aplicativos, Downloads…), o caminho no rodapé, os triângulos que expandem
+  uma pasta na lista (“Expandir Downloads” / “Recolher Downloads”) e os botões “Agrupar” e
+  “Ação”. Na visualização por ícones, os ícones também abrem. O menu de contexto de um
+  arquivo ou pasta abre com as opções numeradas.
+- **Spotify, Chrome e apps feitos com Electron** (como Docker Desktop e Cursor): o conteúdo
+  da página, incluindo as linhas clicáveis das listas, como as playlists e as músicas do Spotify.
+  Uma linha sem título ganha o nome dos textos dela (“Ela Partiu – Tim Maia”). Esses apps só
+  montam a árvore de acessibilidade depois que alguém pede e a desmontam quando ninguém a lê
+  por um tempo; por isso a leitura espera a página parar de crescer (cerca de 1 a 1,5 s, no
+  máximo 3 s) em vez de numerar uma janela quase vazia.
+- **Outros apps nativos**: botões, links, caixas de seleção, menus, campos de texto e itens
+  que se abrem com AXOpen.
 
 ## Linux
 
@@ -587,4 +697,16 @@ python main.py
 Em distribuições com outro Python padrão, instale Python 3.11 e seus headers pelo
 gerenciador da distribuição ou por um gerenciador de versões antes de criar a venv.
 No Fedora, PortAudio usa `portaudio-devel`; no Arch, `portaudio`.
-Use uma sessão desktop com dispositivo de entrada disponível..
+Use uma sessão desktop com dispositivo de entrada disponível.
+
+O acesso à tela no Linux usa o AT-SPI pelo PyGObject (`gi`), envia teclas com `xdotool` (X11)
+ou `ydotool` (Wayland) e desenha os números no Wayland com gtk-layer-shell. Pelo que o código
+usa, no Debian/Ubuntu isso corresponde a:
+
+```bash
+sudo apt install gir1.2-atspi-2.0 libgirepository-2.0-dev libcairo2-dev pkg-config xdotool
+sudo apt install libgtk-layer-shell0 gir1.2-gtklayershell-0.1 gir1.2-gtk-3.0   # números no Wayland
+python -m pip install PyGObject
+```
+
+Esses passos vêm do código e ainda não foram conferidos numa instalação limpa de Linux.

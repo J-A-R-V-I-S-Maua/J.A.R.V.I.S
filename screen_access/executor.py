@@ -68,9 +68,12 @@ class ScreenExecutor:
                             result = backend.prepare_scroll(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "scroll":
                             result = backend.scroll(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
-                        elif kind in ("activate", "open_item", "context_menu", "press_enter", "clear_text"):
+                        elif kind in ("activate", "open_item", "press_enter", "clear_text"):
                             getattr(backend, kind)(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                             result = None
+                        elif kind in ("context_menu", "close_menu"):
+                            # No macOS o menu aberto volta como janela, para as opções serem numeradas.
+                            result = getattr(backend, kind)(*args, cancelled=lambda: cancel.is_set() or self.stopping.is_set())
                         elif kind == "prepare_paste":
                             result = backend.prepare_paste(*args)
                         elif kind in ("copy_text", "cut_text", "paste_text"):

@@ -21,7 +21,7 @@ celery_app.conf.beat_schedule = {
 }
 
 def _run_transcription(path: str, language: str):
-    segments, _ = model.transcribe(
+    segments, _ = whisper_model().transcribe(
         path,
         language = language,
         vad_filter = True,
@@ -46,11 +46,18 @@ def _run_transcription(path: str, language: str):
         if s.no_speech_prob <= 0.6 and s.avg_logprob >= -1.0
     ]
 
-model = WhisperModel(
-    model_size_or_path="small",
-    device="cpu",
-    compute_type="float32"
-)
+_model = None
+
+
+def whisper_model():
+    """O Whisper só é carregado na primeira transcrição.
+
+    Carregar ao importar fazia o beat (que só agenda a limpeza) ocupar 1,3 GB de RAM à toa.
+    """
+    global _model
+    if _model is None:
+        _model = WhisperModel(model_size_or_path="small", device="cpu", compute_type="float32")
+    return _model
 
 @celery_app.task(name="task.transcribe")
 def transcribe (url, language):

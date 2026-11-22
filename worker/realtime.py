@@ -45,7 +45,10 @@ def transcription_options():
         no_speech_threshold=0.6,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 200},
-        hotwords="sim, não, confirmar, cancelar",
+        # As abas entram aqui, e não no vocabulário: lá elas apagavam o ditado. Medido com gravações
+        # reais (alto-falante para o microfone, voz Luciana): 35 de 36 comandos virou 36 de 36,
+        # e o ditado ficou idêntico palavra por palavra ("nova aba" saía "Não é variável").
+        hotwords="sim, não, confirmar, cancelar, nova aba, fechar aba, próxima aba",
         initial_prompt=INITIAL_PROMPT,
     )
 

@@ -1,4 +1,7 @@
 """Regressões de diálogo e recuperação sem Whisper nem ações externas."""
+import os
+import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,6 +52,7 @@ class ControllerFixture:
         self.service.capture_ready = True
         self.controller.thread = Mock()
         self.controller.thread.service = self.service
+        self.controller.play_cue = Mock()  # os testes não tocam som
 
     def tearDown(self):
         self.controller.shutdown()
@@ -301,7 +305,72 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         self.controller.toggle()
         self.assertFalse(self.controller._follow_up)
 
+    def listen_again(self):
+        self.finish_command()
+        self.controller.play_cue.reset_mock()
+        self.event(State.LISTENING)
+
+    def test_contagem_e_som_quando_a_escuta_abre(self):
+        self.listen_again()
+        began, seconds = self.controller.follow_up_countdown
+        self.assertEqual(seconds, 6.0)
+        self.controller.play_cue.assert_called_once_with("open")
+        self.assertIn("obrigado, Jarvis", self.controller.presentation.guidance)
+
+    def test_a_contagem_some_quando_a_fala_comeca(self):
+        self.listen_again()
+        changed = Mock()
+        self.controller.state_changed.connect(changed)
+        self.controller.speech_started.emit()
+        self.assertIsNone(self.controller.follow_up_countdown)
+        changed.assert_called()
+
+    def test_silencio_toca_o_som_de_encerramento(self):
+        self.listen_again()
+        self.event(State.ERROR, reason=Reason.NO_SPEECH)
+        self.controller.play_cue.assert_called_with("close")
+        self.assertIsNone(self.controller.follow_up_countdown)
+
+    def test_obrigado_jarvis_encerra_em_silencio(self):
+        for phrase in ("Obrigado, Jarvis!", "obrigado jarvis", "Obrigada, Jarvis."):
+            with self.subTest(phrase=phrase):
+                self.listen_again()
+                submits = self.controller.screen.executor.submit.call_count
+                with patch.object(self.service, "request_capture", return_value=True) as capture:
+                    self.event(State.RESULT, phrase)
+                capture.assert_not_called()
+                self.assertEqual(self.controller.screen.executor.submit.call_count, submits)
+                self.assertEqual(self.controller.text, "Modo contínuo encerrado. Diga Hey Jarvis quando precisar.")
+                self.controller.play_cue.assert_called_with("close")
+                self.assertFalse(self.controller._follow_up)
+
+    def test_outras_frases_nao_sao_o_encerramento(self):
+        for phrase in ("pronto", "obrigado", "por enquanto é só", "obrigado pela ajuda, Jarvis"):
+            with self.subTest(phrase=phrase):
+                self.listen_again()
+                self.event(State.RESULT, phrase)
+                self.assertNotIn("Modo contínuo encerrado", self.controller.text)
+
+    def test_fora_do_modo_continuo_obrigado_jarvis_nao_e_especial(self):
+        self.event(State.LISTENING)
+        self.assertIsNone(self.controller.follow_up_countdown)
+        self.controller.play_cue.assert_not_called()
+        self.event(State.RESULT, "obrigado jarvis")
+        self.assertNotIn("Modo contínuo encerrado", self.controller.text)
+
+    def test_frase_solta_tambem_toca_o_encerramento(self):
+        self.listen_again()
+        self.event(State.RESULT, "e aí, tudo certo com você")
+        self.controller.play_cue.assert_called_with("close")
+
+    def test_som_desligado(self):
+        self.controller.preferences.save({"continuous_sound": False}, [])
+        self.listen_again()
+        self.event(State.ERROR, reason=Reason.NO_SPEECH)
+        self.controller.play_cue.assert_not_called()
+
     def test_ajustes_por_voz(self):
+        self.assertEqual(settings_command("desativar som do modo contínuo"), ("continuous_sound", False))
         self.assertEqual(settings_command("ativar modo contínuo"), ("continuous_mode", True))
         self.assertEqual(settings_command("desativar modo contínuo"), ("continuous_mode", False))
         self.assertEqual(settings_command("tempo do modo contínuo 8 segundos"), ("continuous_seconds", 8.0))
@@ -312,6 +381,72 @@ class ContinuousModeTest(ControllerFixture, unittest.TestCase):
         for bad in ({"continuous_seconds": 1}, {"continuous_seconds": 25}, {"continuous_mode": "sim"}):
             with self.assertRaises(ValueError):
                 validate_preferences(bad)
+
+
+class QtPluginsTest(unittest.TestCase):
+    """O Qt ignora plugins ocultos; o macOS chegou a marcar a .venv inteira como oculta."""
+
+    @unittest.skipUnless(hasattr(os, "chflags") and sys.platform == "darwin", "marca de oculto só existe no macOS")
+    def test_plugins_ocultos_sao_liberados(self):
+        from speakbar.__main__ import unhide_qt_plugins
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "platforms"
+            folder.mkdir()
+            plugin = folder / "libqcocoa.dylib"
+            plugin.write_bytes(b"")
+            for path in (folder, plugin):
+                os.chflags(path, os.lstat(path).st_flags | stat.UF_HIDDEN)
+            self.assertEqual(unhide_qt_plugins(root), 2)
+            self.assertFalse(os.lstat(plugin).st_flags & stat.UF_HIDDEN)
+            self.assertEqual(unhide_qt_plugins(root), 0)  # nada mais a fazer
+
+    def test_fora_do_macos_nao_faz_nada(self):
+        from speakbar.__main__ import unhide_qt_plugins
+        with patch.object(sys, "platform", "win32"):
+            self.assertEqual(unhide_qt_plugins("/qualquer"), 0)
+
+    @unittest.skipUnless(hasattr(os, "chflags") and sys.platform == "darwin", "marca de oculto só existe no macOS")
+    def test_copia_os_plugins_para_fora_da_venv(self):
+        from speakbar.__main__ import prepare_qt_plugins
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as cache:
+            (Path(source) / "platforms").mkdir()
+            plugin = Path(source) / "platforms" / "libqcocoa.dylib"
+            plugin.write_bytes(b"plugin")
+            os.chflags(plugin, os.lstat(plugin).st_flags | stat.UF_HIDDEN)  # como o iCloud deixa
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("QT_PLUGIN_PATH", None)
+                target = prepare_qt_plugins(source, cache)
+                self.assertEqual(os.environ["QT_PLUGIN_PATH"], target)
+            copied = Path(target) / "platforms" / "libqcocoa.dylib"
+            self.assertEqual(copied.read_bytes(), b"plugin")
+            self.assertFalse(os.lstat(copied).st_flags & stat.UF_HIDDEN)
+            self.assertTrue(target.startswith(cache))
+
+    def test_respeita_um_qt_plugin_path_ja_definido(self):
+        from speakbar.__main__ import prepare_qt_plugins
+        with patch.dict(os.environ, {"QT_PLUGIN_PATH": "/minha/pasta"}):
+            self.assertIsNone(prepare_qt_plugins("/origem", "/cache"))
+            self.assertEqual(os.environ["QT_PLUGIN_PATH"], "/minha/pasta")
+
+
+class WakeEchoTest(ControllerFixture, unittest.TestCase):
+    """Quem fala "Hey Jarvis, colar texto" de uma vez: o fim do chamado entra na transcrição."""
+
+    def test_tira_o_chamado_so_do_comeco(self):
+        from speakbar.commands import without_wake_word
+        for heard, expected in (("Reijarvis, selecionar a palavra Maria.", "selecionar a palavra Maria."),
+                                ("Rei Jarvis, colar texto.", "colar texto."), ("Hey Jarvis nova aba", "nova aba"),
+                                ("Ei, Jarvis. Deletar.", "Deletar.")):
+            self.assertEqual(without_wake_word(heard), expected)
+        for kept in ("Obrigado, Jarvis.", "digitar o Jarvis é legal", "Reijarvis.", "Jarvisson chegou"):
+            self.assertEqual(without_wake_word(kept), kept)
+
+    def test_comando_com_o_chamado_na_frente_funciona(self):
+        window = Window("chrome-1", 777, "Google Chrome", (0, 0, 1200, 800))
+        self.controller.screen.session.last_window = window
+        self.event(State.LISTENING)
+        self.event(State.RESULT, "Reijarvis, nova aba.")
+        self.assertEqual(self.controller.screen.executor.submit.call_args.args[1:], ("browser", window, "new_tab", None))
 
 
 class SettingsVoiceTest(ControllerFixture, unittest.TestCase):

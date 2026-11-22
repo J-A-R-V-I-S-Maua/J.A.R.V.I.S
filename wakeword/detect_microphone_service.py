@@ -72,6 +72,7 @@ class VoiceService:
         self.detection_threshold = detection_threshold
         self.on_level = on_level
         self.on_devices = on_devices
+        self.on_speech_start = lambda: None  # a pessoa começou a falar (só no streaming)
         self.devices_requested = threading.Event()
         self.paused = threading.Event()
         self.context_listening = False

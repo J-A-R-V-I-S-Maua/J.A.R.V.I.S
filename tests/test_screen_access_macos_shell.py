@@ -78,6 +78,10 @@ class Environment:
         macos.front_window = lambda pid: self.front  # no Finder, depois de clicar na mesa, é a própria mesa
         macos.window_title = lambda w: self.names.get(w, "")
         macos.enable_web_accessibility = Mock()
+        macos.wait_for_web_content = Mock(return_value=True)
+        macos.text_inside = Mock(return_value="")
+        macos.parent = Mock(return_value=None)
+        macos.action_names = getattr(macos, "action_names", None) or (lambda e: ("AXPress",))
         macos.can_press = lambda e: "AXPress" in self.actions.get(e, ())
         macos.is_visible = Mock(return_value=True)
         macos.TEXT_INPUT_ROLES = {"AXTextField"}
@@ -200,6 +204,214 @@ class ScanTest(unittest.TestCase):
         env.actions["img"] = ("AXOpen",)
         action = env.backend.describe("img", None)[3]
         self.assertEqual(action, "")  # AXImage fora da mesa não vira acionável
+
+
+class AppTreeTest(unittest.TestCase):
+    """Itens que a varredura deixava de fora no Finder e no Spotify (medido num Mac real)."""
+
+    def setUp(self):
+        self.env = Environment(self, front="window")
+        # Os mesmos papéis acionáveis do módulo de verdade.
+        self.env.macos.ACTION_ROLES = {"AXLink", "AXButton", "AXRadioButton", "AXCheckBox", "AXPopUpButton",
+                                       "AXMenuItem", "AXMenuButton", "AXDisclosureTriangle", "AXRow"}
+        self.env.macos.walk_with_clip = lambda root, depth, clip: iter([(0, root, clip)])
+
+    def describe(self, element, name, role, actions, **attrs):
+        env = self.env
+        env.roles[element], env.names[element], env.actions[element] = role, name, actions
+        env.frames[element] = (10, 10, 100, 20)
+        for key, value in attrs.items():
+            env.attrs[(element, key)] = value
+        return env.backend.describe(element, None)
+
+    def test_nome_de_arquivo_no_finder_abre_o_item(self):
+        # O campo do nome não aceita foco (seria renomear); ele declara AXOpen, que abre o item.
+        with patch.object(self.env.module, "AXUIElementIsAttributeSettable", Mock(return_value=(0, False))):
+            name, role, frame, action, visible, _ = self.describe(
+                "tf", "Downloads", "AXTextField", ("AXOpen", "AXShowMenu"), AXEnabled=True)
+        self.assertEqual((name, action), ("Downloads", "open"))
+
+    def test_barra_lateral_e_caminho_abrem(self):
+        self.assertEqual(self.describe("cell", "Aplicativos", "AXCell", ("AXOpen",))[3], "open")
+        self.assertEqual(self.describe("path", "Macintosh HD", "AXStaticText", ("AXOpen",))[3], "open")
+
+    def test_item_sem_nome_nao_entra(self):
+        self.assertEqual(self.describe("cell2", "", "AXCell", ("AXOpen",))[3], "")
+
+    def test_imagem_so_abre_dentro_do_finder(self):
+        self.env.backend.finder_walk = True  # visualização por ícones
+        self.assertEqual(self.describe("icon", "Relatório.pdf", "AXImage", ("AXOpen",))[3], "open")
+        self.env.backend.finder_walk = False
+        self.assertEqual(self.describe("icon", "Relatório.pdf", "AXImage", ("AXOpen",))[3], "")
+
+    def test_linha_sem_titulo_ganha_o_nome_dos_textos_de_dentro(self):
+        # Uma música do Spotify: AXRow clicável e sem título; os textos ficam nas células.
+        self.env.macos.text_inside = Mock(return_value="Ela Partiu – Tim Maia")
+        name, role, frame, action, visible, _ = self.describe("row", "", "AXRow", ("AXPress", "AXShowMenu"),
+                                                              AXEnabled=True)
+        self.assertEqual((name, action), ("Ela Partiu – Tim Maia", "press"))
+
+    def test_linha_sem_acao_continua_de_fora(self):
+        # Linhas do Finder não têm AXPress; quem entra é o nome do arquivo dentro delas.
+        self.assertEqual(self.describe("frow", "", "AXRow", ("AXShowDefaultUI",), AXEnabled=True)[3], "")
+
+    def test_triangulo_de_expandir_leva_o_nome_da_pasta(self):
+        self.env.macos.parent = Mock(return_value="cellx")
+        self.env.macos.text_inside = Mock(return_value="Downloads")
+        name = self.describe("tri", "", "AXDisclosureTriangle", ("AXPress",), AXEnabled=True, AXValue=0)[0]
+        self.assertEqual(name, "Expandir Downloads")
+        self.env.macos.text_inside.assert_called_with("cellx", skip="tri", limit=1)
+        self.env.attrs[("tri", "AXValue")] = 1
+        self.assertEqual(self.env.backend.describe("tri", None)[0], "Recolher Downloads")
+
+    def test_botoes_de_menu_do_finder(self):
+        self.assertEqual(self.describe("group", "Agrupar", "AXMenuButton", ("AXPress",), AXEnabled=True)[3], "press")
+
+    def test_leitura_espera_a_pagina_do_chromium(self):
+        self.env.backend.scan(self.env.backend.foreground())
+        self.env.macos.wait_for_web_content.assert_called_once_with("window")
+
+
+@unittest.skipUnless(sys.platform == "darwin", "usa o módulo macos de verdade")
+class ChromiumWaitTest(unittest.TestCase):
+    def setUp(self):
+        for name in ("screen_access.macos",):
+            sys.modules.pop(name, None)
+        self.macos = importlib.import_module("screen_access.macos")
+
+    def test_janela_que_nao_e_do_chromium_passa_direto(self):
+        with patch.object(self.macos, "is_chromium_window", return_value=False), \
+                patch.object(self.macos, "web_area_size") as size:
+            self.assertTrue(self.macos.wait_for_web_content("janela"))
+        size.assert_not_called()
+
+    def wait(self, sizes, elapsed_per_nap=0.15, **kwargs):
+        sizes, now = iter(sizes), [0.0]
+        with patch.object(self.macos, "is_chromium_window", return_value=True), \
+                patch.object(self.macos, "web_area_size", side_effect=lambda w: next(sizes)), \
+                patch.object(self.macos.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(self.macos.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + elapsed_per_nap)) as nap:
+            return self.macos.wait_for_web_content("janela", **kwargs), nap.call_count
+
+    def test_pagina_ja_montada_segue_na_hora(self):
+        self.assertEqual(self.wait([1766]), (True, 0))  # o Chrome do dia a dia não fica mais lento
+
+    def test_arvore_desmontada_espera_ficar_grande(self):
+        # Medido no Spotify: o Chromium remonta a árvore em degraus; parar no 132 seria ler pela metade.
+        ready, naps = self.wait([19, 132, 388, 1766])
+        self.assertEqual((ready, naps), (True, 3))
+
+    def test_esqueleto_parado_no_comeco_nao_engana(self):
+        # Como no YouTube: alguns décimos parado só com a busca, e depois a página inteira.
+        ready, naps = self.wait([5, 5, 5, 5, 5, 600])
+        self.assertEqual((ready, naps), (True, 5))
+
+    def test_pagina_pequena_que_parou_de_crescer_esta_pronta_depois_do_tempo_minimo(self):
+        ready, naps = self.wait([12] + [20] * 20)
+        self.assertTrue(ready)
+        self.assertEqual(naps, 8)  # 1,2 s: o tempo de uma remontagem
+
+    def test_desiste_no_limite(self):
+        now = [0.0]
+        counter = iter(range(1000))
+        with patch.object(self.macos, "is_chromium_window", return_value=True), \
+                patch.object(self.macos, "web_area_size", side_effect=lambda w: next(counter)), \
+                patch.object(self.macos.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(self.macos.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + s)):
+            self.assertFalse(self.macos.wait_for_web_content("janela", timeout=1.0))
+        self.assertLessEqual(now[0], 1.2)
+
+    def test_textos_de_dentro_sem_numeros_soltos(self):
+        tree = [(0, "row"), (1, "n"), (1, "title"), (1, "artist"), (1, "dup"), (1, "time"), (1, "album")]
+        roles = {"row": "AXRow", "n": "AXStaticText", "title": "AXStaticText", "artist": "AXStaticText",
+                 "dup": "AXStaticText", "time": "AXStaticText", "album": "AXStaticText"}
+        values = {"n": "1", "title": "Ela Partiu", "artist": "Tim Maia", "dup": "Tim Maia", "time": "3:21",
+                  "album": "Racional"}
+        with patch.object(self.macos, "walk", return_value=iter(tree)), \
+                patch.object(self.macos, "element_role", side_effect=lambda e: roles[e]), \
+                patch.object(self.macos, "read_attribute", side_effect=lambda e, a: values.get(e)), \
+                patch.object(self.macos, "same_element", side_effect=lambda a, b: a == b):
+            self.assertEqual(self.macos.text_inside("row"), "Ela Partiu – Tim Maia – Racional")
+
+
+class ContextMenuTest(unittest.TestCase):
+    """Menu de contexto como lido no Finder real: pendurado na lista, alternativas no mesmo lugar."""
+
+    def setUp(self):
+        self.env = env = Environment(self, frontmost=FINDER, front="window")
+        env.macos.ACTION_ROLES = {"AXButton", "AXMenuItem"}
+        env.macos.KEY_ESCAPE = 53
+        env.macos.press_key = Mock()
+        env.macos.walk_with_clip = lambda root, depth, clip: iter([(0, root, clip), (1, "file", clip)])
+        env.roles["file"], env.names["file"], env.frames["file"] = "AXButton", "Downloads", (110, 140, 200, 20)
+        env.actions["file"] = ("AXPress", "AXShowMenu")
+        env.attrs[("file", "AXEnabled")] = True
+        env.children["window"] = ("windowarea", "file")
+        parents = {"file": "window", "ctx": "window"}
+        env.macos.parent = lambda element: parents.get(element)
+        env.macos.perform_action = Mock(side_effect=self.open_menu)
+        items = (("open", "Abrir em Nova Aba", 387), ("alt", "Abrir em Nova Janela", 387), ("sep", "", 411),
+                 ("info", "Obter Informações", 422), ("inspector", "Mostrar Inspetor", 422),
+                 ("off", "Desativada", 446))
+        for element, name, y in items:
+            env.roles[element], env.names[element], env.frames[element] = "AXMenuItem", name, (594, y, 233, 24)
+            env.actions[element] = ("AXPress",)
+            env.attrs[(element, "AXEnabled")] = element not in ("sep", "off")
+        env.roles["ctx"], env.frames["ctx"] = "AXMenu", (594, 382, 233, 378)
+        env.children["ctx"] = tuple(element for element, _, _ in items)
+        self.threads = patch.object(env.module.threading, "Thread", side_effect=self.run_now)
+        self.threads.start()
+        self.addCleanup(self.threads.stop)
+
+    def run_now(self, target, args, **kwargs):
+        target(*args)
+        return Mock()
+
+    def open_menu(self, element, action):
+        self.env.children["window"] = ("windowarea", "file", "ctx")  # o macOS pendura o menu na janela
+        return -25204  # o AXShowMenu "falha" por tempo, com o menu aberto
+
+    def open(self):
+        backend = self.env.backend
+        snapshot = backend.scan(backend.foreground())
+        return backend, backend.context_menu(snapshot, 1)
+
+    def test_abre_e_o_menu_vira_a_janela_da_frente(self):
+        backend, menu = self.open()
+        self.env.macos.perform_action.assert_called_once_with("file", "AXShowMenu")
+        self.assertEqual((menu.identity, menu.title), (f"menu:{FINDER}", "Menu de contexto"))
+        self.assertEqual(backend.foreground(), menu)
+
+    def test_numera_so_as_opcoes_visiveis(self):
+        backend, menu = self.open()
+        names = [e.name for e in backend.scan(menu).elements]
+        self.assertEqual(names, ["Abrir em Nova Aba", "Obter Informações"])
+
+    def test_escolher_uma_opcao(self):
+        backend, menu = self.open()
+        options = backend.scan(menu)
+        backend.activate(options, 2)
+        self.env.macos.press.assert_called_once_with("info")
+
+    def test_menu_fechado_tem_tamanho_zero(self):
+        backend, menu = self.open()
+        self.env.frames["ctx"] = (0, 956, 0, 0)
+        self.assertIsNone(backend.menu_window())
+        self.assertEqual(backend.foreground().title, "Documentos")
+
+    def test_cancelar_fecha_com_esc_so_se_estiver_aberto(self):
+        backend, menu = self.open()
+        backend.close_menu()
+        self.env.macos.press_key.assert_called_once_with(53)
+        self.env.macos.press_key.reset_mock()
+        backend.close_menu()
+        self.env.macos.press_key.assert_not_called()
+
+    def test_sem_menu_avisa(self):
+        self.env.macos.perform_action = Mock(return_value=-25204)  # nada abriu
+        with patch.object(self.env.module, "MENU_WAIT", 0.1):
+            with self.assertRaisesRegex(self.env.module.ScreenError, "não abriu"):
+                self.open()
 
 
 class ActionTest(unittest.TestCase):
@@ -340,6 +552,93 @@ class MissionControlTest(unittest.TestCase):
         self.assertEqual(env.backend.last_field, ("app", "campo"))
 
 
+class MissionControlTahoeTest(unittest.TestCase):
+    """No Tahoe quem desenha o Mission Control é o WindowManager, com uma tela por monitor.
+
+    A árvore espelha a lida num Mac real com dois monitores: as janelas ficam direto na
+    "mc.display" (sem "mc.windows") e o botão de adicionar mesa fica fora da lista.
+    """
+    MANAGER = 1064
+    MAIN, EXTERNAL = (0, 0, 1470, 956), (-1920, -124, 1920, 1080)
+
+    def setUp(self):
+        self.env = env = Environment(self, frontmost=OTHER, front="window")
+        tree = {
+            "disp1": ("AXGroup", "", self.MAIN, ("appstore", "chrome1", "spaces1"), "mc.display"),
+            "appstore": ("AXButton", "App Store", (830, 472, 622, 382), (), "com.apple.AppStore.space.1"),
+            "chrome1": ("AXButton", "Live – Chrome", (18, 213, 775, 487), (), "com.google.Chrome.space.1"),
+            "spaces1": ("AXGroup", "Barra do Spaces", (0, 0, 1470, 164), ("list1", "add1"), "mc.spaces"),
+            "list1": ("AXList", "", (0, 0, 1470, 164), ("mesa1",), "mc.spaces.list"),
+            "mesa1": ("AXButton", "Mesa 1", (735, 96, 168, 129), (), None),
+            "add1": ("AXButton", "Adicionar Mesa", (1539, 96, 138, 90), (), "mc.spaces.add"),
+            "disp2": ("AXGroup", "", self.EXTERNAL, ("docker", "spaces2"), "mc.display"),
+            "docker": ("AXButton", "Containers - Docker Desktop", (-1097, 70, 537, 300), (), "com.electron.dockerdesktop.space.10"),
+            "spaces2": ("AXGroup", "Barra do Spaces", (-1920, -124, 1920, 146), ("list2",), "mc.spaces"),
+            "list2": ("AXList", "", (-1920, -124, 1920, 146), ("mesa2",), "mc.spaces.list"),
+            "mesa2": ("AXButton", "Mesa 2", (-1056, -47, 190, 129), (), None),
+        }
+        for element, (role, name, frame, kids, identifier) in tree.items():
+            env.roles[element], env.names[element], env.frames[element] = role, name, frame
+            env.children[element] = kids
+            env.actions[element] = ("AXPress",) if role == "AXButton" else ()
+            if identifier:
+                env.attrs[(element, "AXIdentifier")] = identifier
+        self.opened(False)
+        bundles = {"com.apple.finder": FINDER, "com.apple.dock": DOCK, "com.apple.WindowManager": self.MANAGER}
+        env.macos.pid_for_bundle = lambda bundle: bundles.get(bundle)
+        env.macos.application_element = lambda pid: {FINDER: "finder", DOCK: "dock", self.MANAGER: "wm"}[pid]
+
+    def opened(self, value):
+        self.env.children["wm"] = ("disp1", "disp2") if value else ()
+
+    def test_aberto_cobre_os_dois_monitores(self):
+        self.opened(True)
+        window = self.env.backend.foreground()
+        self.assertEqual((window.identity, window.pid), (f"missioncontrol:{self.MANAGER}", self.MANAGER))
+        self.assertEqual(window.frame, (-1920, -124, 3390, 1080))
+
+    def test_numera_janelas_e_mesas_dos_dois_monitores(self):
+        self.opened(True)
+        snapshot = self.env.backend.scan(self.env.backend.foreground())
+        self.assertEqual([e.name for e in snapshot.elements],
+                         ["App Store", "Live – Chrome", "Mesa 1", "Containers - Docker Desktop", "Mesa 2"])
+        self.env.backend.activate(snapshot, 4)
+        self.env.macos.press.assert_called_once_with("docker")
+
+    def test_fechado_nao_e_a_janela_da_frente(self):
+        self.assertFalse(self.env.backend.foreground().identity.startswith("missioncontrol:"))
+
+    def test_janela_de_outra_mesa_nao_ganha_numero(self):
+        # Medido no Tahoe: o Claude em tela cheia noutra mesa vinha como uma caixa enorme sobre as janelas.
+        env = self.env
+        env.roles["hidden"], env.names["hidden"], env.frames["hidden"] = "AXButton", "Claude", (287, 260, 895, 562)
+        env.actions["hidden"] = ("AXPress",)
+        env.children["disp1"] = ("appstore", "chrome1", "hidden", "spaces1")
+        for element, number in (("appstore", 11), ("chrome1", 12), ("hidden", 108)):
+            env.attrs[(element, "wid")] = number
+        env.macos.onscreen_window_numbers = Mock(return_value={11, 12})
+        self.opened(True)
+        snapshot = env.backend.scan(env.backend.foreground())
+        self.assertNotIn("Claude", [e.name for e in snapshot.elements])
+        self.assertIn("Mesa 1", [e.name for e in snapshot.elements])  # mesas não têm wid e continuam
+
+    def test_numeros_grandes_no_meio_das_miniaturas(self):
+        self.opened(True)
+        snapshot = self.env.backend.scan(self.env.backend.foreground())
+        self.assertEqual({e.badge for e in snapshot.elements}, {"center"})
+
+    def test_mostrar_janelas_abre_e_espera_o_window_manager(self):
+        shell = self.env.module.macos_shell
+        with patch.object(shell.subprocess, "run", side_effect=lambda *a, **k: self.opened(True)) as run, \
+                patch.object(shell, "MISSION_CONTROL_WAIT", 0.05):
+            window = self.env.backend.mission_control(True)
+        run.assert_called_once()
+        self.assertEqual(window.pid, self.MANAGER)
+        with patch.object(shell.subprocess, "run", side_effect=lambda *a, **k: self.opened(False)), \
+                patch.object(shell, "MISSION_CONTROL_WAIT", 0.05):
+            self.assertIsNone(self.env.backend.mission_control(False))
+
+
 class MissionControlToggleTest(unittest.TestCase):
     def environment(self, opened=False, appears=True):
         env = Environment(self, mission_control=opened)
@@ -417,9 +716,24 @@ class MissionControlToggleTest(unittest.TestCase):
         self.assertFalse(env.backend.foreground().identity.startswith("missioncontrol:"))
 
     def test_quando_nao_abre_explica(self):
-        env, _ = self.environment(appears=False)
+        env, calls = self.environment(appears=False)
         with self.assertRaisesRegex(env.module.ScreenError, "não abriu"):
             env.backend.mission_control(True)
+        self.assertEqual(len(calls), 2)  # pediu de novo antes de desistir
+
+    def test_pedido_ignorado_na_animacao_e_repetido(self):
+        env = Environment(self, mission_control=False)
+        shell = env.module.macos_shell
+        calls = []
+
+        def run(arguments, **kwargs):
+            calls.append(arguments)
+            if len(calls) == 2:  # o primeiro caiu na animação de fechar e foi ignorado
+                env.set_mission_control(True)
+
+        with patch.object(shell.subprocess, "run", side_effect=run), patch.object(shell, "MISSION_CONTROL_WAIT", 0.05):
+            self.assertTrue(env.backend.mission_control(True))
+        self.assertEqual(len(calls), 2)
 
     def test_sem_dock_nao_tenta(self):
         env = Environment(self, dock_running=False)

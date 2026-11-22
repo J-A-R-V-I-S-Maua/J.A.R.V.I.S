@@ -557,6 +557,18 @@ class BrowserSessionTest(unittest.TestCase):
         for phrase in ("aba nove", "aba", "voltar", "nova", "abrir Safari", "role para baixo"):
             self.assertIsNone(browser_command(phrase), phrase)
 
+    def test_trocas_reais_do_whisper_com_aba(self):
+        # Transcrições medidas com a voz Luciana do macOS e o vocabulário atual do Whisper.
+        from screen_access.commands import browser_command
+
+        for phrase, expected in (("Nova Ada.", ("new_tab", None)), ("Ado anterior.", ("previous_tab", None)),
+                                 ("Abar anterior.", ("previous_tab", None)), ("Próxima arba.", ("next_tab", None)),
+                                 ("Fechar ava.", ("close_tab", None)), ("Ir para a ada 2", ("tab", 2))):
+            self.assertEqual(browser_command(phrase), expected, phrase)
+        # A troca só vale quando a frase inteira vira um comando: "Ada" solta continua sendo nada.
+        for phrase in ("Ada", "a Ada chegou", "nova Ada Lovelace"):
+            self.assertIsNone(browser_command(phrase), phrase)
+
     def test_respostas_com_voltar_nao_cancelam(self):
         self.assertIsNone(classify_reply("voltar página"))
 
@@ -600,6 +612,59 @@ class BrowserSessionTest(unittest.TestCase):
         self.assertEqual(self.session.target, chrome)
         self.session.handle("nova aba")
         self.assertEqual(self.executor.submit.call_args.args[2], chrome)
+
+
+class ContextMenuSessionTest(unittest.TestCase):
+    MENU = Window("menu:635", 635, "Menu de contexto", (594, 382, 233, 378))
+
+    def setUp(self):
+        self.executor = Mock()
+        self.views = []
+        self.session = ScreenSession(self.executor, self.views.append)
+        self.snapshot = snapshot()
+        self.session.receive(0, "foreground", self.snapshot.window)
+        self.session.begin_capture()
+        self.session.handle("abrir menu de contexto de pesquisar")
+        self.session.receive(self.session.token, "scan", self.snapshot)
+        self.session.handle("confirmar")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("context_menu", self.snapshot, 1))
+
+    def options(self):
+        return Snapshot("menu-1", self.MENU, (
+            Element(1, "Abrir em Nova Aba", "AXMenuItem", (594, 387, 233, 24), "press"),
+            Element(2, "Mover para o Lixo", "AXMenuItem", (594, 411, 233, 24), "press"),
+        ))
+
+    def open_menu(self):
+        self.session.receive(self.session.token, "context_menu", self.MENU)
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("scan", self.MENU, 32, 3000, False))
+        self.session.receive(self.session.token, "scan", self.options())
+
+    def test_menu_aberto_ja_mostra_as_opcoes(self):
+        self.open_menu()
+        self.assertEqual(self.session.state, ActionState.CHOOSING)
+        self.assertEqual(self.views[-1].text, "Diga o número da opção do menu ou cancelar.")
+        self.assertTrue(self.views[-1].capture)
+
+    def test_opcao_escolhida_ainda_pede_confirmacao(self):
+        # Há opções como "Mover para o Lixo": o número leva à pergunta, não direto à ação.
+        self.open_menu()
+        self.session.handle("dois")
+        self.assertEqual(self.session.state, ActionState.CONFIRMING)
+        self.assertIn("Mover para o Lixo", self.views[-1].text)
+        self.session.handle("confirmar")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("activate", self.options(), 2))
+
+    def test_cancelar_fecha_o_menu(self):
+        self.open_menu()
+        self.session.handle("cancelar")
+        self.assertEqual(self.executor.submit.call_args.args[1:], ("close_menu",))
+        self.assertFalse(self.session.choosing_menu)
+
+    def test_sem_menu_de_volta_e_o_aviso_de_sempre(self):
+        # Windows e Linux não devolvem o menu.
+        self.session.receive(self.session.token, "context_menu", None)
+        self.assertEqual(self.views[-1].text, "Pedido aceito pelo aplicativo.")
 
 
 if __name__ == "__main__":

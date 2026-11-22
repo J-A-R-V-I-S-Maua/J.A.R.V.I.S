@@ -1,6 +1,7 @@
 """Atalhos de abertura: correspondência exata e destinos tipados, sem shell."""
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
@@ -11,6 +12,21 @@ from PySide6.QtGui import QDesktopServices
 from .commands import normalize, SETTINGS_COMMANDS, RESERVED
 WINDOWS_RESOURCES = {"explorer": "Explorador de Arquivos", "settings": "Configurações do Windows",
                      "network": "Configurações de Rede", "sound": "Configurações de Som"}
+
+
+# Que arquivo conta como aplicativo em cada sistema (no Linux, qualquer executável).
+APPLICATION_TYPES = {
+    "win32": ((".exe", ".lnk"), "Selecione um aplicativo .exe ou atalho .lnk."),
+    "darwin": ((".app",), "Selecione um aplicativo .app."),
+    "linux": ((), "Selecione um aplicativo."),
+}
+APPLICATION_FILTERS = {"win32": "Aplicativos (*.exe *.lnk)", "darwin": "Aplicativos (*.app)", "linux": ""}
+
+
+def destination_exists(path, kind):
+    if kind == "folder" or path.suffix.lower() == ".app":  # no macOS um aplicativo é uma pasta .app
+        return path.is_dir()
+    return path.is_file()
 
 
 def validate_shortcut(item, check_destination=True):
@@ -39,9 +55,11 @@ def validate_shortcut(item, check_destination=True):
         path = Path(destination)
         if not path.is_absolute():
             raise ValueError("Selecione um caminho absoluto.")
-        if kind == "application" and path.suffix.lower() not in (".exe", ".lnk"):
-            raise ValueError("Selecione um aplicativo .exe ou atalho .lnk.")
-        if check_destination and not (path.is_dir() if kind == "folder" else path.is_file()):
+        if kind == "application":
+            suffixes, message = APPLICATION_TYPES.get(sys.platform, APPLICATION_TYPES["linux"])
+            if suffixes and path.suffix.lower() not in suffixes:
+                raise ValueError(message)
+        if check_destination and not destination_exists(path, kind):
             raise ValueError("O destino não existe. Selecione novamente.")
     else:
         raise ValueError("Tipo de ação inválido.")
@@ -94,8 +112,18 @@ class ShortcutService:
         if kind == "site":
             if not QDesktopServices.openUrl(QUrl(destination)):
                 raise OSError("O sistema recusou o endereço.")
+        elif kind != "windows" and sys.platform != "win32":
+            # Aplicativo ou pasta no macOS e no Linux, sempre com a lista de argumentos (sem shell).
+            if sys.platform == "darwin":
+                command = ["/usr/bin/open", destination]
+            elif os.path.isfile(destination) and os.access(destination, os.X_OK):
+                command = [destination]  # um executável do Linux roda direto
+            else:
+                command = ["xdg-open", destination]
+            subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
         elif sys.platform != "win32":
-            raise OSError("Esse tipo de abertura está disponível somente no Windows.")
+            raise OSError("Recursos do Windows só abrem no Windows.")
         elif kind == "windows":
             if destination == "explorer":
                 os.startfile(str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "explorer.exe"))

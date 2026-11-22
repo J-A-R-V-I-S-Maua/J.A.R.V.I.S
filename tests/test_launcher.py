@@ -73,6 +73,11 @@ class BrowserPhraseTest(Base):
         self.assertFalse(self.conversation.handle("abrir nova aba"))
         self.assertEqual(self.messages, [])
 
+    def test_aba_mal_transcrita_nao_vira_pedido_de_aplicativo(self):
+        # Transcrição real pelo microfone: "aba anterior" saiu "Abar anterior", e "abar" lembra "abrir".
+        self.assertFalse(self.conversation.handle("Abar anterior."))
+        self.assertEqual(self.messages, [])
+
 
 class SucceededTest(Base):
     CONFIRM = False

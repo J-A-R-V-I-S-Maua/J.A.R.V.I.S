@@ -189,16 +189,35 @@ BROWSER_ACTIONS = frozenset(BROWSER_COMMANDS.values()) | {"tab"}
 SPOKEN_COMMANDS = {**FIELD_COMMANDS, **BROWSER_COMMANDS}
 
 
+# Como o Whisper escreve "aba" quando ela vem solta numa frase curta (medido com a voz Luciana
+# do macOS, também passando pelo alto-falante e pelo microfone: "Nova Ada", "Ado anterior",
+# "Abar anterior", "Próxima arba"). A troca só vale se a frase inteira virar um comando de navegador.
+TAB_SOUNDALIKES = frozenset({"ada", "ava", "ado", "alba", "abar", "arba"})
+
+
 def browser_command(text):
     """("new_tab"|…|"tab", número da aba ou None), ou None. "Ir para a aba 3" vira ("tab", 3)."""
     phrase = normalized(text)
-    if phrase in BROWSER_COMMANDS:
-        return BROWSER_COMMANDS[phrase], None
-    match = re.fullmatch(r"(?:(?:ir|va|vai) para (?:a )?)?aba (?:numero )?(.+)", phrase)
-    number = parse_number(match[1]) if match else None
-    if number is not None and 1 <= number <= 8:
-        return "tab", number
+    for candidate in (phrase, " ".join("aba" if word in TAB_SOUNDALIKES else word for word in phrase.split())):
+        if candidate in BROWSER_COMMANDS:
+            return BROWSER_COMMANDS[candidate], None
+        match = re.fullmatch(r"(?:(?:ir|va|vai) para (?:a )?)?aba (?:numero )?(.+)", candidate)
+        number = parse_number(match[1]) if match else None
+        if number is not None and 1 <= number <= 8:
+            return "tab", number
     return None
+
+
+def spoken_browser_command(text):
+    """Como browser_command, mais as frases que só soam como um comando de navegador.
+
+    A semelhança disputa com os comandos de campo (SPOKEN_COMMANDS), para nunca trocar um pelo outro.
+    """
+    command = browser_command(text)
+    if command is None:
+        guess = field_command(text, SPOKEN_COMMANDS)
+        command = (guess, None) if guess in BROWSER_ACTIONS else None
+    return command
 
 
 def field_command(text, table=FIELD_COMMANDS):

@@ -14,7 +14,7 @@ def defaults():
                 start_timeout=speech.start_timeout, max_seconds=speech.max_seconds,
                 detection_threshold=float(os.getenv("DETECTION_THRESHOLD", "0.3")),
                 text_size=18, number_size=12, high_contrast=False, remember_position=True,
-                continuous_mode=True, continuous_seconds=6.0,
+                continuous_mode=True, continuous_seconds=6.0, continuous_sound=True,
                 position=None, max_depth=int(os.getenv("SCREEN_MAX_DEPTH", "32")),
                 max_elements=int(os.getenv("SCREEN_MAX_ELEMENTS", "3000")))
 
@@ -34,7 +34,7 @@ def validate_preferences(values):
                                    ("max_depth", 0, 2147483647), ("max_elements", 1, 10000)):
         if type(result[key]) is not int or not minimum <= result[key] <= maximum:
             raise ValueError(f"Valor inválido: {key}.")
-    for key in ("remember_position", "high_contrast", "continuous_mode"):
+    for key in ("remember_position", "high_contrast", "continuous_mode", "continuous_sound"):
         if type(result[key]) is not bool:
             raise ValueError("Preferência de aparência inválida.")
     seconds = result["continuous_seconds"]
